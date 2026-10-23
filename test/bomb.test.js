@@ -35,15 +35,24 @@ test('bombs are capped and never spawn on the snake, apples or each other', () =
   }
 });
 
-test('bomb gift respects the board cap', () => {
+test('a bomb over the cap is delivered to the body instead of refused', () => {
   const state = createState(() => 0.5);
   for (let i = 0; i < CONFIG.maxBombs; i++) {
     const cell = applyGift(state, 'bomb');
     assert.equal(cell.ok, true);
+    assert.equal(cell.onBody, undefined);
     assert.ok(spawnBombAt(state, cell.cell));
   }
   assert.equal(state.bombs.length, CONFIG.maxBombs);
-  assert.equal(applyGift(state, 'bomb').ok, false);
+
+  const over = applyGift(state, 'bomb');
+  assert.equal(over.ok, true);
+  assert.equal(over.onBody, true);
+  assert.ok(
+    state.snake.some((s) => s.x === over.cell.x && s.y === over.cell.y),
+    'the extra bomb must target a body cell',
+  );
+  assert.equal(state.bombs.length, CONFIG.maxBombs);
 });
 
 test('a dropped bomb is not eatable until it lands', () => {

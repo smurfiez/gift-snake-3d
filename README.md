@@ -22,17 +22,18 @@ No build step is required. Three.js loads from a CDN through the import map in `
 | `4` | Slow down |
 | `T` | Cycle the colour theme |
 | `R` | Restart the round |
-| `D` | Debug menu (victory lap toggle) |
+| `D` | Debug menu: victory lap, random gifts, speed multiplier |
 
 Gold, silver, and bronze gifters persist across rounds. Repeated gifts from the same viewer within four seconds build a combo multiplier up to 5x.
 
 ## Rules
 
-- The board is 12 x 13 cells. Filling every cell wins the round.
-- Bombs land on the board like apples and only act when the snake eats one, cutting two segments (never below the minimum length). A bomb is not a board object while it is falling, so it cannot be eaten or targeted until it lands; if it lands on the snake it flies into the mouth and detonates there. The AI goes for a safe route to a bomb before an apple. During a rescue the snake cannot move, so a bomb detonates on drop instead and frees it.
+- The board is 12 x 13 cells and the snake moves at 5 cells per second. Filling every cell wins the round.
+- Bombs land on the board like apples and only act when the snake eats one, cutting two segments (never below the minimum length). A bomb is not a board object while it is falling, so it cannot be eaten or targeted until it lands; if it lands on the snake, or the board already holds three bombs, it flies into the mouth and detonates there. The bitten-off tail blows apart. The AI goes for a safe route to a bomb before an apple. During a rescue the snake cannot move, so a bomb detonates on drop instead and frees it.
 - The AI is beatable: it occasionally misjudges a move and starts playing greedily for the rest of the round, which is how a round can be lost. Roughly one round in eight ends in a crash.
 - The AI follows a precomputed fill order cell by cell, so the body draws one clean pattern instead of a body cut by shortcuts. Every move keeps the tail reachable by construction, so following the order cannot trap the snake.
 - The pattern changes every round: rings or serpentine, on either axis, mirrored or reversed (32 variants), so the stream does not replay one shape.
+- A gift apple is never refused: with no free cell it takes the tail cell, so the snake shortens by one. Procedural apples only use free cells, so they stop during the victory lap or on a full board and resume once space clears.
 - Apples and bombs are placed on the path just ahead of the head, so the snake goes for them within a second or two. It cannot chase an item that is off the order: skipping a cell there leaves a hole that only a full lap can recover.
 - Filling the board starts a 10 second victory lap with a large countdown: the snake keeps moving, the length stops changing, and a bomb cut during the lap cancels the pending win. When the clock runs out the round shows STREAMER WINS, counts 3 seconds, and restarts by itself.
 - A self-collision starts a 10 second rescue window. Viewers can free the snake with a bomb; otherwise the round ends.

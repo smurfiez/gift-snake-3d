@@ -567,6 +567,11 @@
       .debug-head { font-size: var(--t-micro); font-weight: 800; letter-spacing: 0.18em; color: var(--muted); }
       .debug-row { display: flex; align-items: center; gap: 8px; cursor: pointer; white-space: nowrap; }
       .debug-row input { accent-color: var(--magenta); margin: 0; }
+      .debug-row select {
+        margin-left: auto; padding: 2px 6px; border-radius: 8px;
+        border: 1px solid var(--line); background: #fff; color: var(--text);
+        font: inherit; font-weight: 700;
+      }
 
       /* ---------- focus + scrollbars ---------- */
 
@@ -658,6 +663,20 @@
         <label class="debug-row">
           <input type="checkbox" id="dbg-winlap" checked />
           <span>Victory lap (10s)</span>
+        </label>
+        <label class="debug-row">
+          <input type="checkbox" id="dbg-gifts" />
+          <span>Random gifts</span>
+        </label>
+        <label class="debug-row">
+          <span>Speed</span>
+          <select id="dbg-speed">
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+            <option value="5">5×</option>
+            <option value="10">10×</option>
+            <option value="20">20×</option>
+          </select>
         </label>
       </div>
 

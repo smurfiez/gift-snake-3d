@@ -3,14 +3,12 @@ export const CONFIG = Object.freeze({
   minLength: 3,
   boardW: 12,
   boardH: 13,
-  // Live pace is set in cells per second: 50 c/s means one cell every 20 ms.
-  // Apple drops keep their six-cell spacing, so 6 x 20 ms between spawns.
-  tickMs: 20,
-  minTick: 10,
+  tickMs: 200,
+  minTick: 80,
   maxTick: 400,
   speedStep: 15,
   slowStep: 20,
-  appleIntervalMs: 120,
+  appleIntervalMs: 1200,
   maxApples: 5,
   giftApples: 1,
   bombCut: 2,
@@ -324,16 +322,13 @@ export function upcomingCells(state, count) {
   return out;
 }
 
-export function spawnApple(state) {
-  const rand = state.rand ?? Math.random;
-  const ahead = upcomingCells(state, 8);
-  if (ahead.length && rand() < 0.75) {
-    const p = ahead[Math.floor(rand() * ahead.length)];
-    const apple = { id: state.nextAppleId++, x: p.x, y: p.y };
-    state.apples.push(apple);
-    return apple;
-  }
+function placeApple(state, p) {
+  const apple = { id: state.nextAppleId++, x: p.x, y: p.y };
+  state.apples.push(apple);
+  return apple;
+}
 
+function freeCells(state) {
   const taken = new Set([
     ...state.snake.map(key),
     ...state.apples.map(key),
@@ -345,12 +340,33 @@ export function spawnApple(state) {
       if (!taken.has(`${x},${y}`)) free.push({ x, y });
     }
   }
-  if (!free.length) return null;
+  return free;
+}
 
-  const p = free[Math.floor(rand() * free.length)];
-  const apple = { id: state.nextAppleId++, x: p.x, y: p.y };
-  state.apples.push(apple);
-  return apple;
+// Procedural apples only ever take a free cell. A full board (victory lap) gets
+// none, and spawning resumes by itself once a cell frees up.
+export function spawnApple(state) {
+  if (state.filled || state.won) return null;
+  const rand = state.rand ?? Math.random;
+  const ahead = upcomingCells(state, 8);
+  if (ahead.length && rand() < 0.75) return placeApple(state, ahead[Math.floor(rand() * ahead.length)]);
+
+  const free = freeCells(state);
+  if (!free.length) return null;
+  return placeApple(state, free[Math.floor(rand() * free.length)]);
+}
+
+// Gift apples are never refused: with no free cell the apple takes the tail, so
+// the snake shortens by one and the drop still lands.
+export function spawnGiftApple(state) {
+  const rand = state.rand ?? Math.random;
+  const ahead = upcomingCells(state, 8);
+  if (ahead.length && rand() < 0.75) return placeApple(state, ahead[Math.floor(rand() * ahead.length)]);
+
+  const free = freeCells(state);
+  if (free.length) return placeApple(state, free[Math.floor(rand() * free.length)]);
+  if (state.snake.length <= CONFIG.minLength) return null;
+  return placeApple(state, state.snake.pop());
 }
 
 export function bombAt(state, p) {
@@ -503,7 +519,7 @@ export function applyGift(state, type) {
     case 'apple': {
       const apples = [];
       for (let i = 0; i < CONFIG.giftApples; i++) {
-        const a = spawnApple(state);
+        const a = spawnGiftApple(state);
         if (a) apples.push(a);
       }
       return { type, ok: apples.length > 0, apples };
@@ -523,9 +539,14 @@ export function applyGift(state, type) {
         return { type, ok: removed.length > 0, removed, freed: removed.length > 0 };
       }
       // The client animates the drop and only then calls spawnBombAt, so the
-      // bomb is not on the board (and not edible) while it is falling.
+      // bomb is not on the board (and not edible) while it is falling. With no
+      // free cell or the board already at the cap, the bomb is still delivered:
+      // it lands on the snake and detonates there.
       const cell = pickBombCell(state);
-      return { type, ok: !!cell, cell };
+      if (cell) return { type, ok: true, cell };
+      const body = state.snake[Math.floor((state.rand ?? Math.random)() * state.snake.length)];
+      const onBody = body || state.snake[0];
+      return { type, ok: true, cell: { x: onBody.x, y: onBody.y }, onBody: true };
     }
     case 'speed': {
       const next = Math.max(CONFIG.minTick, state.tickMs - CONFIG.speedStep);

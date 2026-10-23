@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, createState, step, spawnApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateRescue, updateWin } from './logic.js';
+import { CONFIG, createState, step, spawnApple, spawnGiftApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateRescue, updateWin } from './logic.js';
 
 const $ = (s) => document.querySelector(s);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -35,6 +35,8 @@ const hud = {
   cdLabel: $('#countdown-label'),
   debug: $('#debug'),
   winLap: $('#dbg-winlap'),
+  dbgGifts: $('#dbg-gifts'),
+  dbgSpeed: $('#dbg-speed'),
 };
 
 // ---------- audio (synthesized, no asset files) ----------
@@ -967,8 +969,9 @@ function flyBombToMouth(cell) {
       mesh.rotation.z += dt * 11;
       mesh.scale.setScalar(1 - p * 0.3);
       if (p < 1) return false;
-      eatBomb(state, { x: head.x, y: head.y });
+      const cut = eatBomb(state, { x: head.x, y: head.y });
       burst(to, BURST.bomb, { count: 22, power: 1.5 });
+      bombDebris(cut);
       shakeMag = Math.max(shakeMag, 0.45);
       flash('#ff8a3d', '55');
       refreshHud();
@@ -979,21 +982,15 @@ function flyBombToMouth(cell) {
 
 function landBomb(cell) {
   if (state.dead || state.won) return;
-  if ((state.bombs || []).length >= CONFIG.maxBombs) {
-    dropA.set(cell.x + 0.5, 0.4, cell.y + 0.5);
-    burst(dropA, BURST.bomb, { count: 8, power: 0.9 });
-    toast('💣 Bomb limit reached', 'bad');
-    return;
-  }
-  const head = state.snake[0];
+  // No free cell or already at the bomb cap: the bomb still counts, it just
+  // lands on the snake and detonates instead of sitting on the board.
   const onSnake = state.snake.some((s) => s.x === cell.x && s.y === cell.y);
-  if (onSnake) {
-    flyBombToMouth(cell);
+  if (!onSnake && spawnBombAt(state, cell)) {
+    refreshHud();
+    camPunch += 0.15;
     return;
   }
-  if (!spawnBombAt(state, cell)) flyBombToMouth(cell);
-  else refreshHud();
-  if (head) camPunch += 0.15;
+  flyBombToMouth(cell);
 }
 
 function birdDrop(apples) {
@@ -1243,9 +1240,11 @@ function flushAppleBatch(viewer) {
   appleBatches.delete(viewer);
   if (state.dead || state.won) return;
 
+  // Gift apples may take the tail cell when the board is full; procedural
+  // apples never do.
   const apples = [];
   for (let i = 0; i < b.count; i++) {
-    const a = spawnApple(state);
+    const a = spawnGiftApple(state);
     if (!a) break;
     a.dropAt = Number.POSITIVE_INFINITY;
     apples.push(a);
@@ -1472,6 +1471,9 @@ let deadAt = 0;
 let wonAt = 0;
 let roundCounted = false;
 let victoryLap = true;
+let debugSpeed = 1;
+let simGifts = false;
+let giftClock = 0;
 let cdKey = '';
 let clock = 0;
 let shakeMag = 0;
@@ -1565,7 +1567,7 @@ function syncSnake(dt) {
   // Logical ticks jump one cell; visualP slides the body along the trail
   // between them so spacing stays exactly one cell through corners.
   if (!state.dead && !state.won && !state.rescuing) {
-    visualP = Math.min(1, visualP + (dt * 1000) / state.tickMs);
+    visualP = Math.min(1, visualP + (dt * 1000 * debugSpeed) / state.tickMs);
   }
   const back = 1 - visualP;
   for (let i = 0; i < n; i++) sampleTrail(back + i, visual[i]);
@@ -1730,7 +1732,7 @@ function refreshHud() {
   const total = state.w * state.h;
   hud.len.textContent = `${state.snake.length} / ${total}`;
   hud.fill.style.width = `${Math.min(100, (state.snake.length / total) * 100)}%`;
-  hud.speed.textContent = `${(1000 / state.tickMs).toFixed(1)} c/s`;
+  hud.speed.textContent = `${((1000 / state.tickMs) * debugSpeed).toFixed(1)} c/s`;
   hud.map.textContent = `${state.w} × ${state.h}`;
 }
 
@@ -1804,6 +1806,20 @@ function hideBanner() {
 // rules, only pacing.
 function applyDebug() {
   state.winDelayMs = victoryLap ? CONFIG.winDelayMs : 0;
+}
+
+// Debug gift feed: drops gifts at a viewer-ish rate so a round can be watched
+// end to end without tapping. Bombs go out during a rescue so that escape gets
+// exercised too.
+const SIM_GIFTS = ['apple', 'apple', 'apple', 'bomb', 'bomb', 'speed', 'slow'];
+const SIM_GIFT_EVERY = 2.2;
+
+function simGiftTick(dt) {
+  if (!simGifts || state.dead || state.won) return;
+  giftClock += dt;
+  if (giftClock < SIM_GIFT_EVERY) return;
+  giftClock = 0;
+  sendGift(state.rescuing ? 'bomb' : pick(SIM_GIFTS));
 }
 
 function toggleDebug(force) {
@@ -1902,7 +1918,7 @@ function sendGift(type) {
   if (type === 'bomb') {
     if (!ev.ok) {
       sfx.error();
-      toast(state.rescuing ? '💣 Bomb needs two segments to cut' : '💣 No room for a bomb', 'bad');
+      toast('💣 Bomb had no effect', 'bad');
       return;
     }
     sfx.gift(type);
@@ -2032,6 +2048,7 @@ function reset() {
   deadAt = 0;
   wonAt = 0;
   roundCounted = false;
+  giftClock = 0;
   applyDebug();
   hideCountdown();
   acc = 0;
@@ -2115,10 +2132,11 @@ function frame(ms) {
     if (clock - wonAt > CONFIG.restartMs / 1000) reset();
   }
 
+  simGiftTick(dt * debugSpeed);
   const live = !state.dead && !state.won && !state.rescuing;
 
   if (live) {
-    acc += dt * 1000;
+    acc += dt * 1000 * debugSpeed;
     let guard = 0;
     while (acc >= state.tickMs && guard++ < 8) {
       acc -= state.tickMs;
@@ -2146,6 +2164,8 @@ function frame(ms) {
         setWorld(res.bomb, tmpVec);
         tmpVec.y = 0.62;
         burst(tmpVec, BURST.bomb, { count: 30, power: 1.4 });
+        // The bitten-off tail blows apart where it was.
+        bombDebris(res.removed || []);
         shakeMag = Math.max(shakeMag, 0.4);
         flash('#ff8a3d', '55');
         refreshHud();
@@ -2161,7 +2181,7 @@ function frame(ms) {
       }
     }
 
-    appleClock += dt * 1000;
+    appleClock += dt * 1000 * debugSpeed;
     if (appleClock >= CONFIG.appleIntervalMs) {
       appleClock = 0;
       if (state.apples.length < CONFIG.maxApples) spawnApple(state);
@@ -2214,6 +2234,16 @@ window.addEventListener('pointerdown', unlockAudio, { once: true });
 hud.winLap.addEventListener('change', () => {
   victoryLap = hud.winLap.checked;
   applyDebug();
+});
+
+hud.dbgGifts.addEventListener('change', () => {
+  simGifts = hud.dbgGifts.checked;
+  giftClock = 0;
+});
+
+hud.dbgSpeed.addEventListener('change', () => {
+  debugSpeed = Math.max(1, Number(hud.dbgSpeed.value) || 1);
+  refreshHud();
 });
 
 $('#restart').addEventListener('click', () => {

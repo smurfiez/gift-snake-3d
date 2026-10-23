@@ -8,6 +8,7 @@ import {
   chooseMove,
   spawnApple,
   spawnBombAt,
+  spawnGiftApple,
   appleAt,
   fillOrder,
   updateRescue,
@@ -354,6 +355,55 @@ test('spawning fails when the board is full', () => {
   state.snake = [{ x: 0, y: 0 }];
   state.apples = [];
   assert.equal(spawnApple(state), null);
+});
+
+test('a gift apple takes the tail cell when the board is full', () => {
+  const state = createState(() => 0.5);
+  state.w = 2;
+  state.h = 3;
+  state.snake = [
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+    { x: 1, y: 1 },
+    { x: 0, y: 1 },
+    { x: 0, y: 2 },
+  ];
+  state.apples = [{ id: 1, x: 1, y: 2 }];
+  state.bombs = [];
+  state.dir = { x: 0, y: 1 };
+  state.lastMove = { x: 0, y: 1 };
+  const tail = { ...state.snake[state.snake.length - 1] };
+
+  const apple = spawnGiftApple(state);
+  assert.ok(apple);
+  assert.equal(apple.x, tail.x);
+  assert.equal(apple.y, tail.y);
+  assert.equal(state.snake.length, 4);
+  assert.equal(state.apples.length, 2);
+});
+
+test('procedural apples wait for a free cell and then resume', () => {
+  const state = createState(() => 0.5);
+  state.w = 2;
+  state.h = 3;
+  state.snake = [
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+    { x: 1, y: 1 },
+    { x: 0, y: 1 },
+    { x: 0, y: 2 },
+  ];
+  state.apples = [{ id: 1, x: 1, y: 2 }];
+  state.bombs = [];
+
+  assert.equal(spawnApple(state), null);
+  assert.equal(state.snake.length, 5);
+
+  // Space clears up: the next roll places normally again.
+  state.apples = [];
+  const apple = spawnApple(state);
+  assert.ok(apple);
+  assert.equal(state.apples.length, 1);
 });
 
 test('appleAt finds apples by coordinate', () => {
