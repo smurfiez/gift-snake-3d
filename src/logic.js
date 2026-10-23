@@ -3,12 +3,14 @@ export const CONFIG = Object.freeze({
   minLength: 3,
   boardW: 12,
   boardH: 13,
-  tickMs: 200,
-  minTick: 80,
+  // Live pace is set in cells per second: 50 c/s means one cell every 20 ms.
+  // Apple drops keep their six-cell spacing, so 6 x 20 ms between spawns.
+  tickMs: 20,
+  minTick: 10,
   maxTick: 400,
   speedStep: 15,
   slowStep: 20,
-  appleIntervalMs: 1200,
+  appleIntervalMs: 120,
   maxApples: 5,
   giftApples: 1,
   bombCut: 2,
