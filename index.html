@@ -554,6 +554,20 @@
       }
       .countdown.low .countdown-label { letter-spacing: 0.14em; }
 
+      .debug {
+        position: absolute; left: clamp(10px, 1.4cqw, 22px); top: clamp(52px, 8cqh, 78px); z-index: 8;
+        display: none; flex-direction: column; gap: 8px;
+        padding: clamp(8px, 1cqh, 13px) clamp(10px, 1.1cqw, 16px);
+        border-radius: 12px;
+        background: #fffaf6; border: 1px solid var(--line);
+        box-shadow: 0 16px 34px -22px rgba(94, 56, 80, 0.4);
+        font-size: var(--t-xs); color: var(--text);
+      }
+      .debug.show { display: flex; }
+      .debug-head { font-size: var(--t-micro); font-weight: 800; letter-spacing: 0.18em; color: var(--muted); }
+      .debug-row { display: flex; align-items: center; gap: 8px; cursor: pointer; white-space: nowrap; }
+      .debug-row input { accent-color: var(--magenta); margin: 0; }
+
       /* ---------- focus + scrollbars ---------- */
 
       :focus-visible { outline: 2px solid #cf4f82; outline-offset: 2px; }
@@ -637,6 +651,14 @@
       <div class="banner" id="banner" role="status" aria-live="polite">
         <h1 id="banner-title">STREAMER WINS</h1>
         <p id="banner-sub">full board</p>
+      </div>
+
+      <div class="debug" id="debug" aria-hidden="true">
+        <div class="debug-head">DEBUG · D</div>
+        <label class="debug-row">
+          <input type="checkbox" id="dbg-winlap" checked />
+          <span>Victory lap (10s)</span>
+        </label>
       </div>
 
       <div class="countdown" id="countdown" aria-hidden="true">

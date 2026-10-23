@@ -115,15 +115,41 @@ test('the AI walks the fill order cell by cell', () => {
   // The pattern comes from following the fill order exactly: the next move must
   // be the next cell of the order, not a shortcut toward an apple.
   const state = createState(() => 0.5);
-  const order = fillOrder(state.w, state.h);
+  const order = fillOrder(state.w, state.h, state.variant);
   const head = state.snake[0];
   const idx = order.cells.findIndex((c) => c.x === head.x && c.y === head.y);
   const next = order.cells[(idx + 1) % order.n];
 
+  // Keep the board free of items so the only choice left is the order itself.
+  state.apples = [];
+  state.bombs = [];
   const info = chooseMoveDetailed(state, () => 0.99);
   assert.equal(info.kind, 'pattern');
   assert.deepEqual(info.dir, { x: next.x - head.x, y: next.y - head.y });
   assertLegalMove(state, info.dir);
+});
+
+test('gifts land on the path ahead so the snake eats them promptly', () => {
+  // Off-pattern chasing would skip an order cell, so "priority" is implemented
+  // by placing items where the snake is about to go.
+  const state = createState(() => 0.5);
+  state.slipChance = 0;
+  const order = fillOrder(state.w, state.h, state.variant);
+  const head = state.snake[0];
+  const headIdx = order.ids[head.y * state.w + head.x];
+  const ahead = new Set();
+  for (let i = 1; i <= 8; i++) {
+    const c = order.cells[(headIdx + i) % order.n];
+    ahead.add(`${c.x},${c.y}`);
+  }
+
+  let onPath = 0;
+  for (let i = 0; i < 20; i++) {
+    const a = spawnApple(state);
+    if (a && ahead.has(`${a.x},${a.y}`)) onPath++;
+    if (a) state.apples.splice(state.apples.indexOf(a), 1);
+  }
+  assert.ok(onPath >= 10, `only ${onPath}/20 apples landed on the path ahead`);
 });
 
 test('route that would trap the snake is rejected', () => {

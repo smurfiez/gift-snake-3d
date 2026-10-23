@@ -70,7 +70,7 @@ test('landing on an occupied cell is refused so the caller can fly it to the mou
 test('the AI eats a bomb when the fill order reaches it', () => {
   const state = createState(() => 0.5);
   state.slipChance = 0;
-  const order = fillOrder(state.w, state.h);
+  const order = fillOrder(state.w, state.h, state.variant);
   const head = state.snake[0];
   const idx = order.cells.findIndex((c) => c.x === head.x && c.y === head.y);
   const target = order.cells[(idx + 4) % order.n];

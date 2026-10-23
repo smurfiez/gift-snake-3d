@@ -33,6 +33,8 @@ const hud = {
   cd: $('#countdown'),
   cdNum: $('#countdown-num'),
   cdLabel: $('#countdown-label'),
+  debug: $('#debug'),
+  winLap: $('#dbg-winlap'),
 };
 
 // ---------- audio (synthesized, no asset files) ----------
@@ -1469,6 +1471,7 @@ let appleClock = 0;
 let deadAt = 0;
 let wonAt = 0;
 let roundCounted = false;
+let victoryLap = true;
 let cdKey = '';
 let clock = 0;
 let shakeMag = 0;
@@ -1796,6 +1799,19 @@ function hideBanner() {
   hud.banner.className = 'banner';
 }
 
+// ---------- debug menu ----------
+// Temporary knobs for tuning the stream. D opens it; nothing here changes the
+// rules, only pacing.
+function applyDebug() {
+  state.winDelayMs = victoryLap ? CONFIG.winDelayMs : 0;
+}
+
+function toggleDebug(force) {
+  const open = force != null ? force : !hud.debug.classList.contains('show');
+  hud.debug.classList.toggle('show', open);
+  hud.debug.setAttribute('aria-hidden', open ? 'false' : 'true');
+}
+
 // ---------- win / loss record ----------
 const RECORD_KEY = 'giftsnake.record';
 const record = (() => {
@@ -2016,6 +2032,7 @@ function reset() {
   deadAt = 0;
   wonAt = 0;
   roundCounted = false;
+  applyDebug();
   hideCountdown();
   acc = 0;
   camPunch = 0;
@@ -2187,10 +2204,17 @@ window.addEventListener('keydown', (e) => {
     reset();
   } else if (e.key === 't' || e.key === 'T') {
     applyTheme(themeIndex + 1);
+  } else if (e.key === 'd' || e.key === 'D') {
+    toggleDebug();
   }
 });
 
 window.addEventListener('pointerdown', unlockAudio, { once: true });
+
+hud.winLap.addEventListener('change', () => {
+  victoryLap = hud.winLap.checked;
+  applyDebug();
+});
 
 $('#restart').addEventListener('click', () => {
   unlockAudio();
@@ -2223,6 +2247,7 @@ layoutBoard();
 refreshHud();
 renderLeaderboard();
 refreshRecord();
+applyDebug();
 hideParticles();
 syncSnake(0);
 syncApples(0);

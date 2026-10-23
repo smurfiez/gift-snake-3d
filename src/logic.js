@@ -150,17 +150,40 @@ function serpentineCells(w, h) {
   return cells;
 }
 
-// The order the body grows along, cached per board size.
-export function fillOrder(w, h) {
-  const ck = `${w}x${h}`;
+// Pattern families. Each round picks one, so the board does not replay the same
+// shape every time: rings or serpentine, on either axis, then a symmetry.
+export const FILL_PATTERNS = 32;
+
+// Family = which base route: rings or serpentine, each on either axis.
+function patternCells(w, h, family) {
+  if (family === 0) return ringCycle(w, h);
+  if (family === 1) {
+    const cells = ringCycle(h, w);
+    return cells && cells.map((c) => ({ x: c.y, y: c.x }));
+  }
+  if (family === 2) return serpentineCells(w, h);
+  const cells = serpentineCells(h, w);
+  return cells && cells.map((c) => ({ x: c.y, y: c.x }));
+}
+
+// The order the body grows along, cached per board size and pattern. Bits 0-1
+// pick the family, 2-4 apply a mirror or reverse so the same family still reads
+// differently from round to round.
+export function fillOrder(w, h, variant = 0) {
+  const v = ((variant % FILL_PATTERNS) + FILL_PATTERNS) % FILL_PATTERNS;
+  const ck = `${w}x${h}:${v}`;
   if (cycleCache.has(ck)) return cycleCache.get(ck);
 
-  const cells = ringCycle(w, h) || serpentineCells(w, h);
+  let cells = patternCells(w, h, v & 3);
   if (!cells) return null;
+
+  if (v & 4) cells = cells.map((c) => ({ x: w - 1 - c.x, y: c.y }));
+  if (v & 8) cells = cells.map((c) => ({ x: c.x, y: h - 1 - c.y }));
+  if (v & 16) cells = cells.slice().reverse();
 
   const ids = new Int32Array(w * h).fill(-1);
   for (let i = 0; i < cells.length; i++) ids[cells[i].y * w + cells[i].x] = i;
-  const order = { cells, ids, w, h, n: cells.length };
+  const order = { cells, ids, w, h, n: cells.length, variant: v };
   cycleCache.set(ck, order);
   return order;
 }
@@ -174,13 +197,22 @@ function cycleIndex(cycle, p) {
 // further behind the head along the cycle. While that holds the cell after the
 // head on the cycle can never be part of the body, so the snake can keep
 // moving around the cycle forever without ever meeting itself.
+// A body is ordered when its cells on the order sit strictly behind the head.
+// Cells eaten off the order by a safe detour are ignored: they are extra body
+// that the tail carries away, not part of the route.
 function cycleOrdered(cycle, body) {
-  const headIdx = cycleIndex(cycle, body[0]);
-  if (headIdx < 0) return false;
+  let start = 0;
+  let headIdx = cycleIndex(cycle, body[0]);
+  if (headIdx < 0) {
+    start = 1;
+    while (start < body.length && cycleIndex(cycle, body[start]) < 0) start++;
+    if (start >= body.length) return false;
+    headIdx = cycleIndex(cycle, body[start]);
+  }
   let prev = 0;
-  for (let i = 1; i < body.length; i++) {
+  for (let i = start + 1; i < body.length; i++) {
     const idx = cycleIndex(cycle, body[i]);
-    if (idx < 0) return false;
+    if (idx < 0) continue;
     const behind = (headIdx - idx + cycle.n) % cycle.n;
     if (behind <= prev) return false;
     prev = behind;
@@ -198,7 +230,7 @@ function jumpKeepsOrder(cycle, body, target, eats) {
   let prev = 0;
   for (let i = 0; i <= last; i++) {
     const idx = cycleIndex(cycle, body[i]);
-    if (idx < 0) return -1;
+    if (idx < 0) continue;
     const behind = (targetIdx - idx + cycle.n) % cycle.n;
     if (behind <= prev) return -1;
     prev = behind;
@@ -209,7 +241,9 @@ function jumpKeepsOrder(cycle, body, target, eats) {
 export function createState(rand = Math.random) {
   const w = CONFIG.boardW;
   const h = CONFIG.boardH;
-  const cycle = fillOrder(w, h);
+  // A new pattern each round, so the stream does not replay one shape forever.
+  const variant = Math.floor(rand() * FILL_PATTERNS);
+  const cycle = fillOrder(w, h, variant);
   const cx = (w - 1) / 2;
   const cy = (h - 1) / 2;
 
@@ -248,6 +282,7 @@ export function createState(rand = Math.random) {
     rescuing: false,
     rescueMs: 0,
     bombs: [],
+    variant,
     nextAppleId: 1,
     nextBombId: 1,
     eaten: 0,
@@ -267,7 +302,38 @@ export function appleAt(state, p) {
   return state.apples.find((a) => same(a, p)) || null;
 }
 
+// Free cells just ahead on the fill order. Items placed here are eaten within a
+// second or two, which is how the snake "goes for" a gift without ever leaving
+// the pattern.
+export function upcomingCells(state, count) {
+  const order = fillOrder(state.w, state.h, state.variant || 0);
+  if (!order) return [];
+  const head = state.snake[0];
+  const headIdx = order.ids[head.y * state.w + head.x];
+  if (headIdx < 0) return [];
+  const taken = new Set([
+    ...state.snake.map(key),
+    ...state.apples.map(key),
+    ...(state.bombs || []).map(key),
+  ]);
+  const out = [];
+  for (let i = 1; i <= count; i++) {
+    const c = order.cells[(headIdx + i) % order.n];
+    if (!taken.has(key(c))) out.push({ x: c.x, y: c.y });
+  }
+  return out;
+}
+
 export function spawnApple(state) {
+  const rand = state.rand ?? Math.random;
+  const ahead = upcomingCells(state, 8);
+  if (ahead.length && rand() < 0.75) {
+    const p = ahead[Math.floor(rand() * ahead.length)];
+    const apple = { id: state.nextAppleId++, x: p.x, y: p.y };
+    state.apples.push(apple);
+    return apple;
+  }
+
   const taken = new Set([
     ...state.snake.map(key),
     ...state.apples.map(key),
@@ -281,7 +347,6 @@ export function spawnApple(state) {
   }
   if (!free.length) return null;
 
-  const rand = state.rand ?? Math.random;
   const p = free[Math.floor(rand() * free.length)];
   const apple = { id: state.nextAppleId++, x: p.x, y: p.y };
   state.apples.push(apple);
@@ -298,6 +363,13 @@ export function bombAt(state, p) {
 export function pickBombCell(state) {
   if (!Array.isArray(state.bombs)) state.bombs = [];
   if (state.bombs.length >= CONFIG.maxBombs) return null;
+
+  // A gifted bomb lands just ahead of the head when it can, so the snake eats it
+  // almost immediately, and drops to a random free cell otherwise.
+  const rand = state.rand ?? Math.random;
+  const ahead = upcomingCells(state, 12);
+  if (ahead.length && rand() < 0.8) return ahead[Math.floor(rand() * ahead.length)];
+
   const taken = new Set([
     ...state.snake.map(key),
     ...state.apples.map(key),
@@ -310,8 +382,6 @@ export function pickBombCell(state) {
     }
   }
   if (!free.length) return null;
-
-  const rand = state.rand ?? Math.random;
   return free[Math.floor(rand() * free.length)];
 }
 
@@ -383,7 +453,8 @@ export function step(state) {
   if (state.snake.length >= state.w * state.h) {
     if (!state.filled) {
       state.filled = true;
-      state.winMs = CONFIG.winDelayMs;
+      state.winMs = state.winDelayMs ?? CONFIG.winDelayMs;
+      if (state.winMs <= 0) state.won = true;
     }
   } else if (state.filled) {
     // A bomb cut the snake back below a full board: the lap is off.
@@ -814,23 +885,31 @@ function greedySeek(state, body, rand) {
 // real BFS route to an apple, which is what makes the snake chase directly
 // instead of walking the cycle.
 function orderedPlanner(state, cycle, body, rand) {
-  const moves = orderedMoves(state, cycle, body);
-  if (!moves.length) return null;
+  const head = body[0];
+  const headIdx = cycleIndex(cycle, head);
+  let baseIdx = headIdx;
+  if (baseIdx < 0) {
+    for (let i = 1; i < body.length; i++) {
+      const idx = cycleIndex(cycle, body[i]);
+      if (idx >= 0) {
+        baseIdx = idx;
+        break;
+      }
+    }
+  }
+  if (baseIdx < 0) return null;
 
-  // Pattern mode: the fill order is followed cell by cell, so the body reads as
-  // one clean ring/spiral instead of a body cut by shortcuts. Apples and bombs
-  // are simply eaten when the order reaches them.
-  const headIdx = cycleIndex(cycle, body[0]);
-  const nextIdx = (headIdx + 1) % cycle.n;
-  const nextCell = cycle.cells[nextIdx];
-  const stepDir = { x: nextCell.x - body[0].x, y: nextCell.y - body[0].y };
-  const step = moves.find((m) => m.idx === nextIdx && m.dir.x === stepDir.x && m.dir.y === stepDir.y);
-  if (step) {
-    const after = walk(state, body, [step.dir]);
+  const nextCell = cycle.cells[(baseIdx + 1) % cycle.n];
+
+  // Pattern mode: the next order cell, and nothing else. Leaving the order would
+  // skip a cell, and a skipped cell can only be reclaimed a full lap later.
+  const stepDir = { x: nextCell.x - head.x, y: nextCell.y - head.y };
+  if (Math.abs(stepDir.x) + Math.abs(stepDir.y) === 1) {
+    const after = walk(state, body, [stepDir]);
     if (after) {
       remember(state, after[0]);
       return {
-        dir: { ...step.dir },
+        dir: stepDir,
         kind: 'pattern',
         closeCall: isCloseCall(state, after),
         gate: true,
@@ -839,20 +918,26 @@ function orderedPlanner(state, cycle, body, rand) {
     }
   }
 
-  // The next order cell was refused (end of the order, or the body already
-  // covers it). Take the shortest legal ordered step so the snake keeps moving.
-  moves.sort((a, b) => a.delta - b.delta);
-  const pick = moves[0];
-  const after = walk(state, body, [pick.dir]);
-  if (!after) return null;
-  remember(state, after[0]);
-  return {
-    dir: { ...pick.dir },
-    kind: 'space',
-    closeCall: isCloseCall(state, after),
-    gate: true,
-    routeLen: 0,
-  };
+  // The next order cell is refused: take the shortest legal ordered step so the
+  // snake keeps moving.
+  if (headIdx >= 0) {
+    const moves = orderedMoves(state, cycle, body);
+    if (moves.length) {
+      moves.sort((a, b) => a.delta - b.delta);
+      const after = walk(state, body, [moves[0].dir]);
+      if (after) {
+        remember(state, after[0]);
+        return {
+          dir: { ...moves[0].dir },
+          kind: 'space',
+          closeCall: isCloseCall(state, after),
+          gate: true,
+          routeLen: 0,
+        };
+      }
+    }
+  }
+  return null;
 }
 
 // The planner. Order of business:
@@ -938,7 +1023,7 @@ export function chooseMoveDetailed(state, rand = Math.random) {
 
   // Primary: cycle-ordered moves are provably trap-free, and BFS routing
   // inside that set still chases apples directly.
-  const cycle = fillOrder(state.w, state.h);
+  const cycle = fillOrder(state.w, state.h, state.variant || 0);
   if (cycle && cycleOrdered(cycle, body)) {
     const planned = orderedPlanner(state, cycle, body, rand);
     if (planned) return planned;
@@ -1072,7 +1157,7 @@ export function chooseMoveDetailed(state, rand = Math.random) {
   // the tail, then the move that keeps the most room. Never taken while the
   // round is opening, so the first apple still reads as a direct chase.
   if (!opening) {
-    const cycle = fillOrder(state.w, state.h);
+    const cycle = fillOrder(state.w, state.h, state.variant || 0);
     if (cycle) {
       const move = cycleSeek(state, cycle, body, rand);
       if (move) {

@@ -271,6 +271,25 @@ test('filling the board starts a victory lap, then wins', () => {
   assert.equal(state.won, true);
 });
 
+test('the victory lap can be switched off from the debug menu', () => {
+  const state = createState(() => 0.5);
+  state.winDelayMs = 0;
+  state.w = 2;
+  state.h = 2;
+  state.snake = [
+    { x: 0, y: 1 },
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+  ];
+  state.dir = { x: 1, y: 0 };
+  state.lastMove = { x: 1, y: 0 };
+  state.apples = [{ id: 7, x: 1, y: 1 }];
+
+  step(state);
+  assert.equal(state.filled, true);
+  assert.equal(state.won, true);
+});
+
 test('ai never picks the reversing or wall-crashing move', () => {
   const state = createState(() => 0.5);
   state.snake = [
@@ -296,28 +315,32 @@ test('ai steps onto an adjacent apple', () => {
 });
 
 test('the AI follows the fill order instead of detouring to an apple', () => {
-  // The pattern is the point now: an apple next to the head does not pull the
-  // snake off the order, or the body would stop reading as one clean trail.
+  // An apple next to the head does not pull the snake off the order when the
+  // move cannot rejoin at the next order cell.
   const state = createState(() => 0.5);
-  const order = fillOrder(state.w, state.h);
+  state.slipChance = 0;
+  const order = fillOrder(state.w, state.h, state.variant);
   const head = state.snake[0];
   const idx = order.cells.findIndex((c) => c.x === head.x && c.y === head.y);
   const next = order.cells[(idx + 1) % order.n];
-
   const bodyKeys = cellKeys(state);
-  const perps = state.dir.x !== 0
-    ? [{ x: 0, y: -1 }, { x: 0, y: 1 }]
-    : [{ x: -1, y: 0 }, { x: 1, y: 0 }];
-  const side = perps.find(
-    (d) =>
-      head.x + d.x >= 0 &&
-      head.y + d.y >= 0 &&
-      head.x + d.x < state.w &&
-      head.y + d.y < state.h &&
-      !bodyKeys.has(`${head.x + d.x},${head.y + d.y}`),
-  );
-  assert.ok(side, 'expected a free cell next to the head');
+  const near = [
+    { x: 1, y: 0 },
+    { x: -1, y: 0 },
+    { x: 0, y: 1 },
+    { x: 0, y: -1 },
+  ];
+  const side = near.find((d) => {
+    const c = { x: head.x + d.x, y: head.y + d.y };
+    if (c.x < 0 || c.y < 0 || c.x >= state.w || c.y >= state.h) return false;
+    if (bodyKeys.has(`${c.x},${c.y}`)) return false;
+    if (c.x === next.x && c.y === next.y) return false;
+    // Must NOT be on the way back to the next order cell.
+    return Math.abs(c.x - next.x) + Math.abs(c.y - next.y) !== 1;
+  });
+  assert.ok(side, 'expected a free cell that is not a rejoin point');
   state.apples = [{ id: 1, x: head.x + side.x, y: head.y + side.y }];
+  state.bombs = [];
 
   const move = chooseMove(state, () => 0.99);
   assert.deepEqual(move, { x: next.x - head.x, y: next.y - head.y });
