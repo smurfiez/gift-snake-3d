@@ -240,7 +240,11 @@ export function createState(rand = Math.random) {
   const w = CONFIG.boardW;
   const h = CONFIG.boardH;
   // A new pattern each round, so the stream does not replay one shape forever.
-  const variant = Math.floor(rand() * FILL_PATTERNS);
+  // Rings are the signature look, so they get three rounds in four; the two
+  // serpentine families fill the rest. Bits 0-1 pick the family, 2-4 a mirror or
+  // reverse.
+  const family = rand() < 0.75 ? Math.floor(rand() * 2) : 2 + Math.floor(rand() * 2);
+  const variant = family | (Math.floor(rand() * 8) << 2);
   const cycle = fillOrder(w, h, variant);
   const cx = (w - 1) / 2;
   const cy = (h - 1) / 2;

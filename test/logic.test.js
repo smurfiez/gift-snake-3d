@@ -308,11 +308,13 @@ test('ai never picks the reversing or wall-crashing move', () => {
   assert.deepEqual(move, { x: 0, y: -1 });
 });
 
-test('ai steps onto an adjacent apple', () => {
+test('ai steps onto the apple that sits on the next order cell', () => {
   const state = createState(() => 0.5);
-  state.apples = [{ id: 2, x: state.snake[0].x, y: state.snake[0].y - 1 }];
+  const head = state.snake[0];
+  const next = { x: head.x + state.dir.x, y: head.y + state.dir.y };
+  state.apples = [{ id: 2, x: next.x, y: next.y }];
   const move = chooseMove(state, () => 0.99);
-  assert.deepEqual(move, { x: 0, y: -1 });
+  assert.deepEqual(move, state.dir);
 });
 
 test('the AI follows the fill order instead of detouring to an apple', () => {

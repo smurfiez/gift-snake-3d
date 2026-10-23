@@ -35,6 +35,7 @@ const hud = {
   cdLabel: $('#countdown-label'),
   debug: $('#debug'),
   winLap: $('#dbg-winlap'),
+  dbgSound: $('#dbg-sound'),
   dbgGifts: $('#dbg-gifts'),
   dbgSpeed: $('#dbg-speed'),
 };
@@ -46,11 +47,29 @@ let noiseBuf = null;
 let audioUnlocked = false;
 let audioFailed = false;
 
+// Sound is a stream setting, so it survives a reload.
+const SOUND_KEY = 'giftsnake.sound';
+let soundOn = (() => {
+  try {
+    return localStorage.getItem(SOUND_KEY) !== '0';
+  } catch (e) {
+    return true;
+  }
+})();
+
+function saveSound() {
+  try {
+    localStorage.setItem(SOUND_KEY, soundOn ? '1' : '0');
+  } catch (e) {
+    // Storage unavailable; the setting lasts for this session only.
+  }
+}
+
 // Browsers only allow AudioContext creation/resume inside a gesture. Callers
 // unlock on pointerdown/keydown, so no context exists before the first input.
 function unlockAudio() {
   audioUnlocked = true;
-  if (audioFailed) return;
+  if (!soundOn || audioFailed) return;
   try {
     if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
     if (ac.state === 'suspended') ac.resume().catch(() => {});
@@ -61,7 +80,7 @@ function unlockAudio() {
 }
 
 function audio() {
-  if (!audioUnlocked || audioFailed) return null;
+  if (!soundOn || !audioUnlocked || audioFailed) return null;
   if (!ac) {
     try {
       ac = new (window.AudioContext || window.webkitAudioContext)();
@@ -1812,7 +1831,7 @@ function applyDebug() {
 // end to end without tapping. Bombs go out during a rescue so that escape gets
 // exercised too.
 const SIM_GIFTS = ['apple', 'apple', 'apple', 'bomb', 'bomb', 'speed', 'slow'];
-const SIM_GIFT_EVERY = 2.2;
+const SIM_GIFT_EVERY = 1.6;
 
 function simGiftTick(dt) {
   if (!simGifts || state.dead || state.won) return;
@@ -2132,7 +2151,7 @@ function frame(ms) {
     if (clock - wonAt > CONFIG.restartMs / 1000) reset();
   }
 
-  simGiftTick(dt * debugSpeed);
+  simGiftTick(dt);
   const live = !state.dead && !state.won && !state.rescuing;
 
   if (live) {
@@ -2236,6 +2255,15 @@ hud.winLap.addEventListener('change', () => {
   applyDebug();
 });
 
+hud.dbgSound.addEventListener('change', () => {
+  soundOn = hud.dbgSound.checked;
+  saveSound();
+  if (ac) {
+    if (soundOn) ac.resume().catch(() => {});
+    else ac.suspend().catch(() => {});
+  }
+});
+
 hud.dbgGifts.addEventListener('change', () => {
   simGifts = hud.dbgGifts.checked;
   giftClock = 0;
@@ -2277,6 +2305,7 @@ layoutBoard();
 refreshHud();
 renderLeaderboard();
 refreshRecord();
+hud.dbgSound.checked = soundOn;
 applyDebug();
 hideParticles();
 syncSnake(0);
