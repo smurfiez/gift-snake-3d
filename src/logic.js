@@ -3,6 +3,10 @@ export const CONFIG = Object.freeze({
   minLength: 3,
   boardW: 16,
   boardH: 17,
+  // Board growth stops here. Width stays even, so the serpentine fallback can
+  // always close a grown board.
+  maxBoardW: 24,
+  maxBoardH: 25,
   tickMs: 200,
   minTick: 80,
   maxTick: 400,
@@ -43,6 +47,10 @@ export const DIR = Object.freeze({
 });
 
 const DIRS = [DIR.up, DIR.right, DIR.down, DIR.left];
+
+// Growth comes in whole columns or rows and never changes the width parity, so
+// a grown board always has one even side.
+const BOARD_GROW = 2;
 
 const key = (p) => `${p.x},${p.y}`;
 const same = (a, b) => a.x === b.x && a.y === b.y;
@@ -241,16 +249,25 @@ function jumpKeepsOrder(cycle, body, target, eats) {
   return targetIdx;
 }
 
-export function createState(rand = Math.random) {
-  const w = CONFIG.boardW;
-  const h = CONFIG.boardH;
+// Optional `size` is the session board size, so a gifted growth still applies
+// after the round restart. Without it the configured board is used.
+export function createState(rand = Math.random, size = null) {
+  const w = (size && size.w) || CONFIG.boardW;
+  const h = (size && size.h) || CONFIG.boardH;
   // A new pattern each round, so the stream does not replay one shape forever.
   // Rings are the signature look, so they get three rounds in four; the two
   // serpentine families fill the rest. Bits 0-1 pick the family, 2-4 a mirror or
   // reverse.
   const family = rand() < 0.75 ? Math.floor(rand() * 2) : 2 + Math.floor(rand() * 2);
-  const variant = family | (Math.floor(rand() * 8) << 2);
-  const cycle = fillOrder(w, h, variant);
+  let variant = family | (Math.floor(rand() * 8) << 2);
+  let cycle = fillOrder(w, h, variant);
+  // A grown board may not close the rings, which the base board always does.
+  // Keep the mirror bits and swap in the serpentine family, which needs only one
+  // even side.
+  if (!cycle) {
+    variant = 2 | (variant & 28);
+    cycle = fillOrder(w, h, variant);
+  }
   const cx = (w - 1) / 2;
   const cy = (h - 1) / 2;
 
@@ -521,7 +538,29 @@ export function updateRescue(state, dtMs) {
   return { died: true };
 }
 
+// A grown board still needs a fill order: rings close on one shape, serpentine
+// on any board with one even side.
+function boardFits(w, h) {
+  return !!fillOrder(w, h, 0) || !!fillOrder(w, h, 2);
+}
+
+// Board growth is a session setting, not a per-round gift: the body order
+// belongs to the old board, so the caller restarts the round at the returned
+// size. At the cap the board is left untouched.
+function growBoard(state, type) {
+  const w = type === 'widen' ? Math.min(CONFIG.maxBoardW, state.w + BOARD_GROW) : state.w;
+  const h = type === 'taller' ? Math.min(CONFIG.maxBoardH, state.h + BOARD_GROW) : state.h;
+  const grows = w > state.w || h > state.h;
+  const ok = grows && !state.dead && !state.won && !state.rescuing && boardFits(w, h);
+  if (ok) {
+    state.w = w;
+    state.h = h;
+  }
+  return { type, ok, w: state.w, h: state.h };
+}
+
 export function applyGift(state, type) {
+  if (type === 'widen' || type === 'taller') return growBoard(state, type);
   if (state.dead || state.won) return { type, ok: false };
   if (state.rescuing && type !== 'bomb') return { type, ok: false };
 

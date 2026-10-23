@@ -6,7 +6,7 @@ const rnd = (a, b) => a + Math.random() * (b - a);
 const pick = (arr) => arr[(Math.random() * arr.length) | 0];
 const TAU = Math.PI * 2;
 
-const MAX_SEG = CONFIG.boardW * CONFIG.boardH;
+const MAX_SEG = CONFIG.maxBoardW * CONFIG.maxBoardH;
 const VIEWERS = ['nova', 'kito', 'mira', 'zed', 'luna', 'pixel', 'rush', 'koda', 'yuki', 'orin', 'bex', 'tama'];
 
 const GIFTS = {
@@ -14,6 +14,8 @@ const GIFTS = {
   bomb: { icon: '💣', name: 'Bomb', color: '#ff8a3d', sound: 'bomb' },
   speed: { icon: '⚡', name: 'Speed up', color: '#39f6ff', sound: 'speed' },
   slow: { icon: '🐌', name: 'Slow down', color: '#ffc14d', sound: 'slow' },
+  widen: { icon: '↔️', name: 'Widen', color: '#8fb4ff', sound: 'grow' },
+  taller: { icon: '↕️', name: 'Taller', color: '#b99cff', sound: 'grow' },
 };
 
 const hud = {
@@ -21,8 +23,6 @@ const hud = {
   bombs: $('#hud-bombs'),
   wins: $('#hud-wins'),
   losses: $('#hud-losses'),
-  speed: $('#hud-speed'),
-  map: $('#hud-map'),
   toasts: $('#toasts'),
   log: $('#log'),
   banner: $('#banner'),
@@ -256,6 +256,8 @@ const sfx = {
       [0, 1, 2, 3].forEach((i) => tone(420 + i * 180, 0.07, 'square', 0.05, i * 0.05));
     } else if (type === 'slow') {
       [0, 1, 2].forEach((i) => tone(800 - i * 180, 0.12, 'sine', 0.06, i * 0.07));
+    } else if (type === 'widen' || type === 'taller') {
+      [0, 1, 2].forEach((i) => tone(330 + i * 220, 0.14, 'triangle', 0.06, i * 0.07));
     }
     click();
   },
@@ -1539,7 +1541,10 @@ function updateParticles(dt) {
 }
 
 // ---------- state ----------
-let state = createState();
+// Board size is a session setting: a gifted growth restarts the round at the
+// new size instead of reshaping the body mid-round.
+const boardSize = { w: CONFIG.boardW, h: CONFIG.boardH };
+let state = createState(undefined, boardSize);
 const visual = Array.from({ length: MAX_SEG }, () => new THREE.Vector3());
 const trail = [];
 let visualP = 1;
@@ -1812,8 +1817,6 @@ function updateCamera(dt) {
 function refreshHud() {
   hud.apples.textContent = state.eaten || 0;
   hud.bombs.textContent = state.bombsEaten || 0;
-  hud.speed.textContent = `${((1000 / state.tickMs) * debugSpeed).toFixed(1)} c/s`;
-  hud.map.textContent = `${state.w} × ${state.h}`;
 }
 
 function toast(html, kind = '') {
@@ -1828,7 +1831,7 @@ function toast(html, kind = '') {
   }, 2200);
 }
 
-const GIFT_POINTS = { apple: 10, bomb: 25, speed: 15, slow: 10 };
+const GIFT_POINTS = { apple: 10, bomb: 25, speed: 15, slow: 10, widen: 30, taller: 30 };
 const scores = new Map();
 const combos = new Map();
 
@@ -1843,7 +1846,7 @@ function comboFor(viewer) {
 function renderLeaderboard() {
   const top = [...scores].sort((a, b) => b[1] - a[1]).slice(0, 3);
   if (!top.length) {
-    hud.log.innerHTML = '<li>No gifts yet — keys 1–4</li>';
+    hud.log.innerHTML = '<li>No gifts yet — keys 1–6</li>';
     return;
   }
   hud.log.innerHTML = top
@@ -2022,6 +2025,25 @@ function sendGift(type) {
 
   const viewer = lastViewer && Math.random() < 0.68 ? lastViewer : pick(VIEWERS);
   lastViewer = viewer;
+
+  // Growth reshapes the whole board, so it cannot happen under a running body:
+  // take the new size, then restart the round on it, exactly like R.
+  if (type === 'widen' || type === 'taller') {
+    const ev = applyGift(state, type);
+    if (!ev.ok) {
+      sfx.error();
+      toast(`${gift.icon} Board is already at its maximum size`, 'bad');
+      return;
+    }
+    boardSize.w = ev.w;
+    boardSize.h = ev.h;
+    sfx.gift(type);
+    reset();
+    logGift(type, viewer);
+    toast(`${gift.icon} <b>@${viewer}</b> grew the map to ${ev.w} × ${ev.h}`, 'good');
+    return;
+  }
+
   const ev = applyGift(state, type);
 
   if (type === 'bomb') {
@@ -2151,7 +2173,7 @@ function updateWinFx() {
 }
 
 function reset() {
-  state = createState();
+  state = createState(undefined, boardSize);
   trail.length = 0;
   resetTrail();
   yawReady = false;
@@ -2321,7 +2343,7 @@ function frame(ms) {
 }
 
 // ---------- input ----------
-const KEYS = { 1: 'apple', 2: 'bomb', 3: 'speed', 4: 'slow' };
+const KEYS = { 1: 'apple', 2: 'bomb', 3: 'speed', 4: 'slow', 5: 'widen', 6: 'taller' };
 
 document.querySelectorAll('[data-gift]').forEach((btn) => {
   btn.addEventListener('click', () => {
@@ -2368,7 +2390,6 @@ hud.dbgGifts.addEventListener('change', () => {
 
 hud.dbgSpeed.addEventListener('change', () => {
   debugSpeed = Math.max(1, Number(hud.dbgSpeed.value) || 1);
-  refreshHud();
 });
 
 $('#restart').addEventListener('click', () => {

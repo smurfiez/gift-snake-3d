@@ -20,6 +20,8 @@ No build step is required. Three.js loads from a CDN through the import map in `
 | `2` | Bomb: drop a bomb on the board; the snake eats it to lose two segments |
 | `3` | Speed up |
 | `4` | Slow down |
+| `5` | Widen: board +2 columns (max 24) and restart the round |
+| `6` | Taller: board +2 rows (max 25) and restart the round |
 | `T` | Cycle the colour theme |
 | `R` | Restart the round |
 | `D` | Debug menu: victory lap, sound, random gifts, speed multiplier |
@@ -28,7 +30,7 @@ Gold, silver, and bronze gifters persist across rounds. Repeated gifts from the 
 
 ## Rules
 
-- The board is 12 x 13 cells and the snake moves at 5 cells per second. Filling every cell wins the round.
+- The board starts at 12 x 13 cells and the snake moves at 5 cells per second. Filling every cell wins the round. A widen or taller gift grows the board for the rest of the session and restarts the round on the new size, because the body order belongs to the old board. The board never gets narrower.
 - Sound effects are sampled from Mixkit (`assets/sfx/`); the rest of the audio stays synthesised, so the game still works if the files are missing. See `CREDITS.md`.
 - Bombs land on the board like apples and only act when the snake eats one, cutting two segments (never below the minimum length). A bomb is not a board object while it is falling, so it cannot be eaten or targeted until it lands; if it lands on the snake, or the board already holds three bombs, it flies into the mouth and detonates there. The bitten-off tail blows apart. The AI goes for a safe route to a bomb before an apple. During a rescue the snake cannot move, so a bomb detonates on drop instead and frees it.
 - The AI is beatable: it occasionally misjudges a move and starts playing greedily for the rest of the round, which is how a round can be lost. Roughly one round in eight ends in a crash.

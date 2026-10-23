@@ -234,6 +234,78 @@ test('board is a fixed 16x17 and expand/shrink are unknown gift types', () => {
   }
 });
 
+test('widen and taller grow the board by two cells on one axis', () => {
+  const state = createState(() => 0.5);
+  const w0 = CONFIG.boardW;
+  const h0 = CONFIG.boardH;
+
+  const wide = applyGift(state, 'widen');
+  assert.deepEqual(wide, { type: 'widen', ok: true, w: w0 + 2, h: h0 });
+  assert.equal(state.w, w0 + 2);
+  assert.equal(state.h, h0);
+
+  const tall = applyGift(state, 'taller');
+  assert.deepEqual(tall, { type: 'taller', ok: true, w: w0 + 2, h: h0 + 2 });
+  assert.equal(state.w, w0 + 2);
+  assert.equal(state.h, h0 + 2);
+});
+
+test('growth stops at the cap and leaves the board alone there', () => {
+  const state = createState(() => 0.5);
+  state.w = CONFIG.maxBoardW;
+  state.h = CONFIG.maxBoardH;
+  const snake = state.snake.map((s) => ({ ...s }));
+
+  for (const type of ['widen', 'taller']) {
+    const res = applyGift(state, type);
+    assert.equal(res.ok, false, type);
+    assert.equal(res.w, CONFIG.maxBoardW, type);
+    assert.equal(res.h, CONFIG.maxBoardH, type);
+  }
+  assert.deepEqual(state.snake, snake);
+  assert.equal(state.w, CONFIG.maxBoardW);
+  assert.equal(state.h, CONFIG.maxBoardH);
+});
+
+test('a grown board still closes a fill order and starts a clean round', () => {
+  const state = createState(() => 0.5);
+  applyGift(state, 'widen');
+  applyGift(state, 'taller');
+
+  // Every family the restart may pick has to close on the grown board.
+  for (let v = 0; v < 32; v++) {
+    const order = fillOrder(state.w, state.h, v);
+    assert.ok(order, `variant ${v}`);
+    assert.equal(order.n, state.w * state.h);
+  }
+
+  const next = createState(() => 0.5, { w: state.w, h: state.h });
+  assert.equal(next.w, CONFIG.boardW + 2);
+  assert.equal(next.h, CONFIG.boardH + 2);
+  assert.equal(next.apples.length, 1);
+  for (const s of next.snake) {
+    assert.ok(s.x >= 0 && s.y >= 0 && s.x < next.w && s.y < next.h);
+  }
+});
+
+test('a widened board falls back to a pattern that closes', () => {
+  // Rings need height = width + 1, so a board widened by two has none;
+  // serpentine still does.
+  const state = createState(() => 0.5);
+  applyGift(state, 'widen');
+  assert.equal(fillOrder(state.w, state.h, 0), null);
+
+  const next = createState(() => 0.5, { w: state.w, h: state.h });
+  assert.ok(fillOrder(next.w, next.h, next.variant));
+  assert.ok(next.variant & 2, 'expected the serpentine family');
+});
+
+test('createState without a size keeps the configured board', () => {
+  const state = createState(() => 0.5);
+  assert.equal(state.w, CONFIG.boardW);
+  assert.equal(state.h, CONFIG.boardH);
+});
+
 test('filling the board starts a victory lap, then wins', () => {
   const state = createState(() => 0.5);
   state.w = 2;

@@ -329,7 +329,7 @@
         flex: 1;
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        grid-template-rows: repeat(2, minmax(0, 1fr));
+        grid-template-rows: repeat(3, minmax(0, 1fr));
         gap: var(--gap);
         min-height: 0;
       }
@@ -418,6 +418,8 @@
       .g-bomb { --c: var(--orange); }
       .g-speed { --c: var(--cyan); }
       .g-slow { --c: var(--amber); }
+      .g-widen { --c: var(--blue); }
+      .g-taller { --c: var(--violet); }
 
       /* ---------- feedback ---------- */
 
@@ -703,11 +705,6 @@
           <div class="stat"><span class="k">BOMBS EATEN</span><b id="hud-bombs">0</b></div>
         </div>
 
-        <div class="row">
-          <div class="stat"><span class="k">SPEED</span><b id="hud-speed">5.0 c/s</b></div>
-          <div class="stat"><span class="k">MAP</span><b id="hud-map">12 × 13</b></div>
-        </div>
-
         <div class="row record">
           <div class="stat"><span class="k">WINS</span><b id="hud-wins">0</b></div>
           <div class="stat"><span class="k">LOSSES</span><b id="hud-losses">0</b></div>
@@ -723,7 +720,7 @@
         <div class="panel-head">
           <span class="panel-title">GIFT TABLE</span>
           <div class="head-right">
-            <span class="panel-meta">KEYS 1–4</span>
+            <span class="panel-meta">KEYS 1–6</span>
             <button id="restart" type="button" aria-keyshortcuts="R">
               <span>Restart</span><kbd class="key">R</kbd>
             </button>
@@ -750,6 +747,16 @@
             <span class="gift-ico" aria-hidden="true">🐌</span>
             <span class="gift-txt"><span class="gift-name">Slow down</span><span class="gift-desc">Snake slower</span></span>
             <kbd class="gift-key">4</kbd>
+          </button>
+          <button class="gift g-widen" data-gift="widen" type="button" aria-keyshortcuts="5">
+            <span class="gift-ico" aria-hidden="true">↔️</span>
+            <span class="gift-txt"><span class="gift-name">Widen</span><span class="gift-desc">+2 columns</span></span>
+            <kbd class="gift-key">5</kbd>
+          </button>
+          <button class="gift g-taller" data-gift="taller" type="button" aria-keyshortcuts="6">
+            <span class="gift-ico" aria-hidden="true">↕️</span>
+            <span class="gift-txt"><span class="gift-name">Taller</span><span class="gift-desc">+2 rows</span></span>
+            <kbd class="gift-key">6</kbd>
           </button>
         </div>
       </section>
