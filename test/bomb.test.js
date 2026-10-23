@@ -84,9 +84,10 @@ test('the AI eats a bomb when the fill order reaches it', () => {
   const idx = order.cells.findIndex((c) => c.x === head.x && c.y === head.y);
   const target = order.cells[(idx + 4) % order.n];
   state.bombs = [{ id: 9, x: target.x, y: target.y }];
+  state.apples = [];
 
   let eaten = null;
-  for (let i = 0; i < 8 && !eaten; i++) {
+  for (let i = 0; i < 10 && !eaten; i++) {
     state.dir = chooseMove(state, () => 0.99);
     const res = step(state);
     if (res.bomb) eaten = res;

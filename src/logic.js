@@ -390,8 +390,8 @@ export function pickBombCell(state) {
   // A gifted bomb lands just ahead of the head when it can, so the snake eats it
   // almost immediately, and drops to a random free cell otherwise.
   const rand = state.rand ?? Math.random;
-  const ahead = upcomingCells(state, 12);
-  if (ahead.length && rand() < 0.8) return ahead[Math.floor(rand() * ahead.length)];
+  const ahead = upcomingCells(state, 4);
+  if (ahead.length && rand() < 0.9) return ahead[Math.floor(rand() * ahead.length)];
 
   const taken = new Set([
     ...state.snake.map(key),
@@ -935,18 +935,15 @@ function orderedPlanner(state, cycle, body, rand) {
   // window shrinks, so the closing cells are never stranded behind it. Bombs
   // win ties at the same distance.
   const reach = Math.max(4, 14 - Math.floor(body.length / 12));
-  const bombs = state.bombs || [];
-  const goals = bombs.length ? [...bombs, ...state.apples] : state.apples;
   let target = null;
   let best = Infinity;
-  for (const item of goals) {
+  for (const item of state.apples) {
     const idx = cycleIndex(cycle, item);
     if (idx < 0) continue;
     const dist = (idx - baseIdx + cycle.n) % cycle.n;
     if (dist === 0 || dist > reach) continue;
-    const score = dist - (bombs.includes(item) ? 0.5 : 0);
-    if (score < best) {
-      best = score;
+    if (dist < best) {
+      best = dist;
       target = item;
     }
   }
@@ -964,7 +961,7 @@ function orderedPlanner(state, cycle, body, rand) {
         remember(state, after[0]);
         return {
           dir: { ...found.path[0] },
-          kind: bombs.includes(target) ? 'bomb' : 'apple',
+          kind: 'apple',
           closeCall: isCloseCall(state, after),
           gate: true,
           routeLen: found.path.length,

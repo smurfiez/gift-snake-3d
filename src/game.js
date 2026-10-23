@@ -74,10 +74,58 @@ function unlockAudio() {
   try {
     if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
     if (ac.state === 'suspended') ac.resume().catch(() => {});
+    loadSamples();
   } catch {
     audioFailed = true;
     ac = null;
   }
+}
+
+// ---------- sampled SFX ----------
+// Free Mixkit previews, trimmed by playback window; the synth below stays as
+// the fallback whenever a file is missing or cannot be decoded.
+const SAMPLES = {
+  eat: { src: 'assets/sfx/eat.mp3', gain: 0.55, max: 0.9 },
+  bomb: { src: 'assets/sfx/bomb.mp3', gain: 0.6, max: 1.4 },
+  crash: { src: 'assets/sfx/crash.mp3', gain: 0.55, max: 1.1 },
+  win: { src: 'assets/sfx/win.mp3', gain: 0.5, max: 3.2 },
+};
+const sampleBuf = new Map();
+let samplesLoading = false;
+
+async function loadSamples() {
+  if (samplesLoading) return;
+  samplesLoading = true;
+  const c = audio();
+  if (!c) {
+    samplesLoading = false;
+    return;
+  }
+  for (const [name, s] of Object.entries(SAMPLES)) {
+    if (sampleBuf.has(name)) continue;
+    try {
+      const res = await fetch(s.src);
+      if (!res.ok) continue;
+      sampleBuf.set(name, await c.decodeAudioData(await res.arrayBuffer()));
+    } catch (e) {
+      // Keep the synth for this sound.
+    }
+  }
+}
+
+function playSample(name) {
+  const s = SAMPLES[name];
+  const buf = sampleBuf.get(name);
+  const c = audio();
+  if (!buf || !c || !s) return false;
+  const src = c.createBufferSource();
+  src.buffer = buf;
+  const gain = c.createGain();
+  gain.gain.value = s.gain;
+  src.connect(gain).connect(c.destination);
+  src.start();
+  if (s.max) src.stop(c.currentTime + s.max);
+  return true;
 }
 
 function audio() {
@@ -214,10 +262,22 @@ const sfx = {
   error() {
     tone(150, 0.16, 'square', 0.07);
   },
+  eat() {
+    if (playSample('eat')) return;
+    tone(880, 0.09, 'sine', 0.08);
+    tone(1320, 0.1, 'sine', 0.05, 0.05);
+  },
+  explode() {
+    if (playSample('bomb')) return;
+    tone(140, 0.32, 'sawtooth', 0.14, 0, 38);
+    tone(70, 0.3, 'square', 0.06, 0.02, 30);
+  },
   crash() {
+    if (playSample('crash')) return;
     tone(220, 0.5, 'sawtooth', 0.12, 0, 40);
   },
   win() {
+    if (playSample('win')) return;
     [523, 659, 784, 1046].forEach((f, i) => tone(f, 0.3, 'triangle', 0.09, i * 0.11));
   },
 };
@@ -2208,12 +2268,14 @@ function frame(ms) {
       const res = step(state);
       if (res.moved) pushTrail();
       if (res.ate) {
+        sfx.eat();
         removeAppleMesh(res.ate);
         setWorld(res.ate, tmpVec);
         tmpVec.y = 0.62;
         burst(tmpVec, BURST.eat);
       }
       if (res.bomb) {
+        sfx.explode();
         removeBombMesh(res.bomb);
         setWorld(res.bomb, tmpVec);
         tmpVec.y = 0.62;
