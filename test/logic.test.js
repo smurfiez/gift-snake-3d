@@ -151,16 +151,52 @@ test('eating an apple adds exactly one segment', () => {
   assert.equal(state.apples.length, 0);
 });
 
-test('bomb cuts two segments and never drops below the minimum', () => {
+test('bomb gift drops a bomb instead of cutting the snake', () => {
   const state = createState(() => 0.5);
-  assert.equal(applyGift(state, 'bomb').ok, false);
-  assert.equal(state.snake.length, CONFIG.minLength);
-
-  for (let i = 0; i < 4; i++) state.snake.push({ x: 0, y: 0 });
+  const before = state.snake.length;
   const res = applyGift(state, 'bomb');
   assert.equal(res.ok, true);
+  assert.ok(res.bomb);
+  assert.equal(state.bombs.length, 1);
+  assert.equal(state.snake.length, before);
+  const b = state.bombs[0];
+  assert.ok(!cellKeys(state).has(`${b.x},${b.y}`));
+});
+
+test('eating a bomb cuts two segments and never drops below the minimum', () => {
+  const state = createState(() => 0.5);
+  state.snake = [
+    { x: 5, y: 5 },
+    { x: 4, y: 5 },
+    { x: 3, y: 5 },
+    { x: 2, y: 5 },
+    { x: 1, y: 5 },
+  ];
+  state.dir = { x: 1, y: 0 };
+  state.lastMove = { x: 1, y: 0 };
+  state.apples = [{ id: 1, x: 0, y: 0 }];
+  state.bombs = [{ id: 1, x: 6, y: 5 }];
+
+  const res = step(state);
+  assert.equal(res.moved, true);
+  assert.equal(res.bomb.id, 1);
   assert.equal(res.removed.length, CONFIG.bombCut);
-  assert.equal(state.snake.length, CONFIG.minLength + 2);
+  assert.equal(state.snake.length, 3);
+  assert.equal(state.bombs.length, 0);
+
+  // At the minimum length the bomb still gets eaten, it just cuts nothing.
+  state.bombs = [{ id: 2, x: state.snake[0].x + state.dir.x, y: state.snake[0].y }];
+  state.snake = [
+    { x: 5, y: 6 },
+    { x: 4, y: 6 },
+    { x: 3, y: 6 },
+  ];
+  state.dir = { x: 1, y: 0 };
+  state.apples = [{ id: 2, x: 0, y: 0 }];
+  state.bombs = [{ id: 3, x: 6, y: 6 }];
+  const small = step(state);
+  assert.equal(small.removed.length, 0);
+  assert.equal(state.snake.length, CONFIG.minLength);
 });
 
 test('apple gift spawns CONFIG.giftApples distinct apples on free cells', () => {

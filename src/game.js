@@ -775,6 +775,39 @@ function makeAppleMesh() {
   return group;
 }
 
+// bombs: dark body, short fuse, warm spark — hazards that stay in the toy palette
+const bombGeo = new THREE.SphereGeometry(0.28, 16, 12);
+const bombMat = new THREE.MeshStandardMaterial({
+  color: 0x3a2436,
+  emissive: 0x1c0f1a,
+  emissiveIntensity: 0.5,
+  roughness: 0.42,
+  metalness: 0.25,
+});
+const fuseGeo = new THREE.CylinderGeometry(0.028, 0.028, 0.2, 6);
+const fuseMat = new THREE.MeshStandardMaterial({ color: 0x8a6a4a, roughness: 0.9 });
+const sparkGeo = new THREE.SphereGeometry(0.085, 10, 8);
+const sparkMat = new THREE.MeshBasicMaterial({
+  color: 0xffc14d, blending: THREE.AdditiveBlending, depthWrite: false,
+});
+const BOMB_FALL = 0.5;
+
+function makeBombMesh() {
+  const group = new THREE.Group();
+  const body = new THREE.Mesh(bombGeo, bombMat);
+  body.position.y = 0.3;
+  group.add(body);
+  const fuse = new THREE.Mesh(fuseGeo, fuseMat);
+  fuse.position.set(0, 0.55, 0);
+  fuse.rotation.z = 0.5;
+  group.add(fuse);
+  const spark = new THREE.Mesh(sparkGeo, sparkMat);
+  spark.position.set(-0.06, 0.66, 0);
+  group.add(spark);
+  group.userData.spark = spark;
+  return group;
+}
+
 // ---------- apple drop actors ----------
 // One actor per apple batch: bird fly-by, parachute, UFO beam, meteor shower.
 const dropActors = [];
@@ -1342,6 +1375,7 @@ let visualP = 1;
 let headYaw = 0;
 let yawReady = false;
 const appleMeshes = [];
+const bombMeshes = [];
 let appleClock = 0;
 let deadAt = 0;
 let clock = 0;
@@ -1527,6 +1561,49 @@ function syncApples(dt) {
   }
 }
 
+// Bombs leave state only by being eaten or by reset, same as apples.
+function removeBombMesh(b) {
+  if (!b.mesh) return;
+  scene.remove(b.mesh);
+  const idx = bombMeshes.indexOf(b.mesh);
+  if (idx !== -1) bombMeshes.splice(idx, 1);
+  b.mesh = null;
+}
+
+function syncBombs(dt) {
+  for (const b of state.bombs || []) {
+    let mesh = b.mesh;
+    if (!mesh) {
+      mesh = makeBombMesh();
+      mesh.userData.born = clock;
+      mesh.userData.seed = Math.random() * TAU;
+      mesh.scale.setScalar(0.01);
+      b.mesh = mesh;
+      bombMeshes.push(mesh);
+      scene.add(mesh);
+    }
+    setWorld(b, tmpVec);
+    const bob = 0.06 + Math.sin(clock * 3 + mesh.userData.seed) * 0.07;
+    mesh.position.set(tmpVec.x, bob, tmpVec.z);
+    mesh.rotation.y = (mesh.rotation.y + dt * 0.9) % TAU;
+    mesh.userData.spark.scale.setScalar(0.8 + Math.sin(clock * 22 + mesh.userData.seed) * 0.3);
+
+    // Gift bombs fall onto the cell on their own mesh, so no drop actor is needed.
+    if (b.dropAt != null) {
+      if (clock < b.dropAt) {
+        const p = Math.min(1, 1 - (b.dropAt - clock) / BOMB_FALL);
+        mesh.position.y = bob + (1 - p) * (1 - p) * 3.2;
+        continue;
+      }
+      b.dropAt = null;
+      mesh.userData.born = clock;
+    }
+    const age = clock - mesh.userData.born;
+    const pop = age < 0.32 ? Math.max(0.01, easeOutBack(age / 0.32)) : 1;
+    mesh.scale.setScalar(pop);
+  }
+}
+
 function updateCamera(dt) {
   const { w, h } = state;
   camTarget.set(w / 2, 0, h / 2);
@@ -1663,34 +1740,41 @@ function sendGift(type) {
 
   const viewer = lastViewer && Math.random() < 0.68 ? lastViewer : pick(VIEWERS);
   lastViewer = viewer;
-  const wasRescuing = state.rescuing;
   const ev = applyGift(state, type);
 
   if (type === 'bomb') {
     if (!ev.ok) {
       sfx.error();
-      toast('💣 Bomb fizzled — snake at minimum length', 'bad');
+      toast(state.rescuing ? '💣 Bomb needs two segments to cut' : '💣 No room for a bomb', 'bad');
       return;
     }
     sfx.gift(type);
-    for (const s of ev.removed) {
-      setWorld(s, tmpVec);
-      tmpVec.y = 0.5;
-      burst(tmpVec, BURST.bomb, { count: 8, power: 0.8 });
-    }
-    bombDebris(ev.removed);
-    shakeMag = Math.max(shakeMag, 0.6);
-    fovPunch(3);
-    flash('#ff5a2d');
-    if (wasRescuing) {
+    if (ev.freed) {
+      // Rescue path: the bomb detonates on drop so the snake gets its tail back.
+      for (const s of ev.removed) {
+        setWorld(s, tmpVec);
+        tmpVec.y = 0.5;
+        burst(tmpVec, BURST.bomb, { count: 8, power: 0.8 });
+      }
+      bombDebris(ev.removed);
+      shakeMag = Math.max(shakeMag, 0.6);
+      fovPunch(3);
+      flash('#ff5a2d');
       acc = 0;
       hideBanner();
       flash('#9dff3d');
       toast(`💣 <b>@${viewer} freed the snake</b>`, 'good');
+      logGift(type, viewer, ev.removed.length);
     } else {
-      toast(`💣 <b>@${viewer} −${ev.removed.length} segments</b>`, 'bad');
+      ev.bomb.dropAt = clock + BOMB_FALL;
+      setWorld(ev.bomb, tmpVec);
+      tmpVec.y = 0.5;
+      burst(tmpVec, BURST.bomb, { count: 10, power: 1.2 });
+      shakeMag = Math.max(shakeMag, 0.18);
+      flash('#ff8a3d', '33');
+      toast(`💣 <b>@${viewer}</b> dropped a bomb`, 'bad');
+      logGift(type, viewer);
     }
-    logGift(type, viewer, ev.removed.length);
   } else if (type === 'speed' || type === 'slow') {
     sfx.gift(type);
     setWorld(state.snake[0], tmpVec);
@@ -1797,6 +1881,8 @@ function reset() {
   for (const f of winFx) f.active = false;
   for (const mesh of appleMeshes) scene.remove(mesh);
   appleMeshes.length = 0;
+  for (const mesh of bombMeshes) scene.remove(mesh);
+  bombMeshes.length = 0;
   hud.toasts.replaceChildren();
   hud.log.replaceChildren();
   combos.clear();
@@ -1812,7 +1898,7 @@ function reset() {
   camBase.copy(CAM_DIR).multiplyScalar(camDist).add(camTarget);
   camLook.copy(camTarget);
   // Shared geometry/materials stay alive across resets on purpose; only per-apple
-  // groups are created and detached, so there is nothing else to dispose here.
+  // and per-bomb groups are created and detached, so there is nothing else to dispose here.
 }
 
 // ---------- loop ----------
@@ -1874,6 +1960,15 @@ function frame(ms) {
         setWorld(res.ate, tmpVec);
         tmpVec.y = 0.62;
         burst(tmpVec, BURST.eat);
+      }
+      if (res.bomb) {
+        removeBombMesh(res.bomb);
+        setWorld(res.bomb, tmpVec);
+        tmpVec.y = 0.62;
+        burst(tmpVec, BURST.bomb, { count: 30, power: 1.4 });
+        shakeMag = Math.max(shakeMag, 0.4);
+        flash('#ff8a3d', '55');
+        refreshHud();
       }
       if (res.moved) refreshHud();
       if (res.died) {
@@ -1967,6 +2062,7 @@ renderLeaderboard();
 hideParticles();
 syncSnake(0);
 syncApples(0);
+syncBombs(0);
 
 camDist = fitDistance();
 camTarget.set(state.w / 2, 0, state.h / 2);

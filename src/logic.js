@@ -12,6 +12,7 @@ export const CONFIG = Object.freeze({
   maxApples: 5,
   giftApples: 1,
   bombCut: 2,
+  maxBombs: 3,
   rescueMs: 10000,
   restartMs: 3000,
   // Planner tuning. The margin is the number of free cells the head must keep
@@ -146,7 +147,9 @@ export function createState(rand = Math.random) {
     won: false,
     rescuing: false,
     rescueMs: 0,
+    bombs: [],
     nextAppleId: 1,
+    nextBombId: 1,
     eaten: 0,
     recent: [],
     dramaCooldown: 0,
@@ -165,7 +168,11 @@ export function appleAt(state, p) {
 }
 
 export function spawnApple(state) {
-  const taken = new Set([...state.snake.map(key), ...state.apples.map(key)]);
+  const taken = new Set([
+    ...state.snake.map(key),
+    ...state.apples.map(key),
+    ...(state.bombs || []).map(key),
+  ]);
   const free = [];
   for (let y = 0; y < state.h; y++) {
     for (let x = 0; x < state.w; x++) {
@@ -181,6 +188,34 @@ export function spawnApple(state) {
   return apple;
 }
 
+export function bombAt(state, p) {
+  return (state.bombs || []).find((b) => same(b, p)) || null;
+}
+
+// Bombs live on the board like apples and only act when the snake eats one.
+export function spawnBomb(state) {
+  if (!Array.isArray(state.bombs)) state.bombs = [];
+  if (state.bombs.length >= CONFIG.maxBombs) return null;
+  const taken = new Set([
+    ...state.snake.map(key),
+    ...state.apples.map(key),
+    ...state.bombs.map(key),
+  ]);
+  const free = [];
+  for (let y = 0; y < state.h; y++) {
+    for (let x = 0; x < state.w; x++) {
+      if (!taken.has(`${x},${y}`)) free.push({ x, y });
+    }
+  }
+  if (!free.length) return null;
+
+  const rand = state.rand ?? Math.random;
+  const p = free[Math.floor(rand() * free.length)];
+  const bomb = { id: state.nextBombId++, x: p.x, y: p.y };
+  state.bombs.push(bomb);
+  return bomb;
+}
+
 export function step(state) {
   if (state.dead || state.won || state.rescuing) return { moved: false };
 
@@ -194,6 +229,7 @@ export function step(state) {
   }
 
   const apple = appleAt(state, next);
+  const bomb = bombAt(state, next);
   const body = apple ? state.snake : state.snake.slice(0, -1);
   if (body.some((s) => same(s, next))) {
     state.rescuing = true;
@@ -207,8 +243,15 @@ export function step(state) {
     state.eaten = (state.eaten || 0) + 1;
   } else state.snake.pop();
 
+  let removed = [];
+  if (bomb) {
+    state.bombs.splice(state.bombs.indexOf(bomb), 1);
+    const cut = Math.min(CONFIG.bombCut, state.snake.length - CONFIG.minLength);
+    if (cut > 0) removed = state.snake.splice(state.snake.length - cut, cut);
+  }
+
   if (state.snake.length >= state.w * state.h) state.won = true;
-  return { moved: true, ate: apple, died: false, won: state.won };
+  return { moved: true, ate: apple, bomb, removed, died: false, won: state.won };
 }
 
 // Self-collision freezes the snake; a bomb shortens it and ends the freeze.
@@ -236,14 +279,21 @@ export function applyGift(state, type) {
       return { type, ok: apples.length > 0, apples };
     }
     case 'bomb': {
-      const removable = Math.min(CONFIG.bombCut, state.snake.length - CONFIG.minLength);
-      const removed =
-        removable > 0 ? state.snake.splice(state.snake.length - removable, removable) : [];
-      if (removed.length) {
-        state.rescuing = false;
-        state.rescueMs = 0;
+      // Bombs are board objects now: the snake has to eat one for the cut to
+      // happen. A rescue is the exception, because a frozen snake cannot move
+      // to reach it and that window is the only way out.
+      if (state.rescuing) {
+        const removable = Math.min(CONFIG.bombCut, state.snake.length - CONFIG.minLength);
+        const removed =
+          removable > 0 ? state.snake.splice(state.snake.length - removable, removable) : [];
+        if (removed.length) {
+          state.rescuing = false;
+          state.rescueMs = 0;
+        }
+        return { type, ok: removed.length > 0, removed, freed: removed.length > 0 };
       }
-      return { type, ok: removed.length > 0, removed };
+      const bomb = spawnBomb(state);
+      return { type, ok: !!bomb, bomb };
     }
     case 'speed': {
       const next = Math.max(CONFIG.minTick, state.tickMs - CONFIG.speedStep);
@@ -605,26 +655,38 @@ function orderedPlanner(state, cycle, body, rand) {
     };
   }
 
-  // Commit to one apple until it is eaten or out of reach. Without this the
-  // snake swaps targets every tick and orbits between two equally near apples.
-  const target =
-    state.target && state.apples.some((a) => same(a, state.target)) ? state.target : null;
-  const goals = target ? [state.target] : state.apples;
+  // Commit to one target until it is eaten or out of reach. Without this the
+  // snake swaps targets every tick and orbits between two equally near ones.
+  const food = [...(state.bombs || []), ...state.apples];
+  const target = state.target && food.some((a) => same(a, state.target)) ? state.target : null;
 
-  const routes = [];
-  for (const m of moves) {
-    const after = walk(state, body, [m.dir]);
-    const found = after ? shortestPathTo(state, after, goals, rand) : null;
-    const path = found ? [m.dir, ...found.path] : [m.dir];
-    routes.push({
-      dir: m.dir,
-      delta: m.delta,
-      path,
-      len: found ? 1 + found.path.length : Infinity,
-      danger: found ? dangerScore(state, body, path) : 0,
-      target: found ? found.target : null,
-      after,
-    });
+  const buildRoutes = (goals) => {
+    const out = [];
+    for (const m of moves) {
+      const after = walk(state, body, [m.dir]);
+      const found = after ? shortestPathTo(state, after, goals, rand) : null;
+      const path = found ? [m.dir, ...found.path] : [m.dir];
+      out.push({
+        dir: m.dir,
+        delta: m.delta,
+        path,
+        len: found ? 1 + found.path.length : Infinity,
+        danger: found ? dangerScore(state, body, path) : 0,
+        target: found ? found.target : null,
+        after,
+      });
+    }
+    return out;
+  };
+
+  // Bombs outrank apples: one is only worth eating if a route to it is safe.
+  const batches = target
+    ? [[state.target]]
+    : [state.bombs || [], state.apples].filter((list) => list.length);
+  let routes = [];
+  for (const goals of batches) {
+    routes = buildRoutes(goals);
+    if (routes.some((r) => Number.isFinite(r.len))) break;
   }
 
   const reachable = routes.filter((r) => Number.isFinite(r.len));
@@ -684,7 +746,8 @@ function orderedPlanner(state, cycle, body, rand) {
     kind = 'space';
     const fresh = moves.filter((m) => thingFresh(state, m.dir, body));
     const pool = fresh.length ? fresh : moves;
-    for (const m of pool) m.food = cycleDistanceToFood(cycle, m.idx, state.apples);
+    const dinner = (state.bombs || []).length ? state.bombs : state.apples;
+    for (const m of pool) m.food = cycleDistanceToFood(cycle, m.idx, dinner);
     pool.sort((a, b) => a.food - b.food || a.delta - b.delta);
     const pick = pool[0];
     chosen = {
@@ -827,12 +890,13 @@ export function chooseMoveDetailed(state, rand = Math.random) {
 
   if (pool.length) {
     // One route per gate-passing first step: from the post-step head, BFS to
-    // the nearest apple. Searching per first step (instead of one path per
-    // apple) is what keeps a safe apple reachable when the single shortest
-    // path happens to start with a move the gate rejects.
+    // the nearest food. Searching per first step (instead of one path per
+    // target) is what keeps a safe target reachable when the single shortest
+    // path happens to start with a move the gate rejects. Bombs come first.
+    const food = (state.bombs || []).length ? [...state.bombs, ...state.apples] : state.apples;
     const routes = [];
     for (const m of pool) {
-      const found = shortestPathTo(state, m.after, state.apples, rand);
+      const found = shortestPathTo(state, m.after, food, rand);
       // An apple on the very next cell gives an empty tail path, which is a
       // one-step route, not a miss.
       if (!found) continue;
@@ -887,8 +951,7 @@ export function chooseMoveDetailed(state, rand = Math.random) {
           (a, b) =>
             b.room - a.room ||
             b.far - a.far ||
-            nearestAppleDistance(a.c, state.apples) -
-              nearestAppleDistance(b.c, state.apples) ||
+            nearestAppleDistance(a.c, food) - nearestAppleDistance(b.c, food) ||
             recentPenalty(state, a.c) - recentPenalty(state, b.c) ||
             rand() - 0.5
         );
