@@ -9,6 +9,7 @@ import {
   spawnApple,
   spawnBombAt,
   appleAt,
+  fillOrder,
   updateRescue,
   updateWin,
 } from '../src/logic.js';
@@ -294,11 +295,15 @@ test('ai steps onto an adjacent apple', () => {
   assert.deepEqual(move, { x: 0, y: -1 });
 });
 
-test('food comes before the Hamiltonian step', () => {
-  // Fresh snake sits on the cycle, so state.dir is its Hamiltonian next step.
-  // The apple is placed one perpendicular cell away: food-first must win.
+test('the AI follows the fill order instead of detouring to an apple', () => {
+  // The pattern is the point now: an apple next to the head does not pull the
+  // snake off the order, or the body would stop reading as one clean trail.
   const state = createState(() => 0.5);
+  const order = fillOrder(state.w, state.h);
   const head = state.snake[0];
+  const idx = order.cells.findIndex((c) => c.x === head.x && c.y === head.y);
+  const next = order.cells[(idx + 1) % order.n];
+
   const bodyKeys = cellKeys(state);
   const perps = state.dir.x !== 0
     ? [{ x: 0, y: -1 }, { x: 0, y: 1 }]
@@ -315,8 +320,8 @@ test('food comes before the Hamiltonian step', () => {
   state.apples = [{ id: 1, x: head.x + side.x, y: head.y + side.y }];
 
   const move = chooseMove(state, () => 0.99);
-  assert.deepEqual(move, side);
-  assert.notDeepEqual(move, state.dir);
+  assert.deepEqual(move, { x: next.x - head.x, y: next.y - head.y });
+  assert.notDeepEqual(move, side);
 });
 
 test('spawning fails when the board is full', () => {

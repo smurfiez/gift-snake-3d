@@ -7,6 +7,7 @@ import {
   chooseMoveDetailed,
   spawnApple,
   appleAt,
+  fillOrder,
 } from '../src/logic.js';
 
 // mulberry32-style PRNG, same generator the existing simulation tests use.
@@ -110,31 +111,19 @@ const assertLegalMove = (state, dir) => {
   assert.ok(!same(dir, rev), 'move does not reverse');
 };
 
-test('safe apple route beats the cycle orbit', () => {
-  // 12x13. Short snake heading down; the apple sits three cells above the
-  // head, a direct route, but the surrounding cells are far apart along the
-  // Hamiltonian cycle. The planner must take the apple route, not the orbit.
+test('the AI walks the fill order cell by cell', () => {
+  // The pattern comes from following the fill order exactly: the next move must
+  // be the next cell of the order, not a shortcut toward an apple.
   const state = createState(() => 0.5);
-  state.snake = [
-    { x: 5, y: 6 },
-    { x: 5, y: 7 },
-    { x: 5, y: 8 },
-  ];
-  state.dir = { x: 0, y: -1 };
-  state.lastMove = { x: 0, y: -1 };
-  state.apples = [{ id: 1, x: 5, y: 3 }];
-  state.eaten = 0;
+  const order = fillOrder(state.w, state.h);
+  const head = state.snake[0];
+  const idx = order.cells.findIndex((c) => c.x === head.x && c.y === head.y);
+  const next = order.cells[(idx + 1) % order.n];
 
   const info = chooseMoveDetailed(state, () => 0.99);
-  assert.ok(info.kind === 'apple' || info.kind === 'drama', `kind was ${info.kind}`);
+  assert.equal(info.kind, 'pattern');
+  assert.deepEqual(info.dir, { x: next.x - head.x, y: next.y - head.y });
   assertLegalMove(state, info.dir);
-
-  const before = manhattan(state.snake[0], state.apples[0]);
-  const after = { x: state.snake[0].x + info.dir.x, y: state.snake[0].y + info.dir.y };
-  assert.ok(
-    manhattan(after, state.apples[0]) < before,
-    `first step must shorten the distance to the apple (${before} -> ${manhattan(after, state.apples[0])})`,
-  );
 });
 
 test('route that would trap the snake is rejected', () => {
@@ -205,49 +194,38 @@ test('unsafe drama route is rejected', () => {
 });
 
 test('opening does not orbit', () => {
-  // A cycle planner returns to the same cells; the BFS planner sweeps new
-  // ground and closes on the apple instead of looping.
+  // Following the order means the first 20 cells are all new: no short loop,
+  // which is what the old cycle planner did.
   const rand = seeded(1);
   const state = createState(rand);
   state.slipChance = 0;
   const visited = new Set([key(state.snake[0])]);
-  const distance = () => {
-    if (!state.apples.length) return 0;
-    let best = Infinity;
-    for (const a of state.apples) best = Math.min(best, manhattan(state.snake[0], a));
-    return best;
-  };
-  const startDistance = distance();
 
   for (let i = 0; i < 20; i++) {
-    state.dir = chooseMoveDetailed(state, rand).dir;
+    const info = chooseMoveDetailed(state, rand);
+    assert.equal(info.kind, 'pattern', `tick ${i} left the fill order`);
+    state.dir = info.dir;
     step(state);
     visited.add(key(state.snake[0]));
   }
 
-  assert.ok(visited.size >= 14, `opening revisited cells (${visited.size} distinct)`);
-  assert.ok(distance() < startDistance, `distance did not close (${startDistance} -> ${distance()})`);
+  assert.equal(visited.size, 21, `opening revisited cells (${visited.size} distinct)`);
   assert.equal(state.dead, false);
 });
 
-test('first apple is eaten quickly in seeded openings', () => {
+test('the moving snake eats apples as the order reaches them', () => {
   for (let seed = 1; seed <= 5; seed++) {
     const rand = seeded(seed);
     const state = createState(rand);
     let ticks = 0;
-    let info = null;
-    while (!state.dead && !state.rescuing && state.eaten === 0 && ticks < 60) {
-      info = chooseMoveDetailed(state, rand);
-      state.dir = info.dir;
+    while (!state.dead && !state.rescuing && state.eaten === 0 && ticks < 170) {
+      state.dir = chooseMoveDetailed(state, rand).dir;
       step(state);
       ticks++;
-      assert.equal(state.rescuing, false, `seed ${seed} entered rescue at tick ${ticks}`);
     }
     assert.equal(state.dead, false, `seed ${seed} died at tick ${ticks}`);
-    assert.equal(state.eaten, 1, `seed ${seed} ate no apple within 60 ticks`);
     assert.equal(state.rescuing, false, `seed ${seed} trapped itself`);
-    assert.ok(ticks < 60, `seed ${seed} ate at the cap`);
-    assert.ok(info, `seed ${seed} produced no move`);
+    assert.equal(state.eaten, 1, `seed ${seed} ate no apple within 170 ticks`);
   }
 });
 

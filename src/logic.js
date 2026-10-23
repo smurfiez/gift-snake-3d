@@ -46,12 +46,92 @@ const same = (a, b) => a.x === b.x && a.y === b.y;
 
 const cycleCache = new Map();
 
-// A Hamiltonian cycle exists whenever one side is even. The 12-wide board
-// therefore gets a full cycle; the 13-wide one gets none.
-function hamiltonCycle(w, h) {
+// Concentric-ring Hamiltonian cycle. Rings are peeled from the outside in, each
+// ring walking its perimeter except for one seam cell on the middle row; the
+// growing body therefore draws nested rectangles instead of stripes. Returns
+// null for shapes this construction cannot close, which then fall back to the
+// serpentine cycle below.
+//
+// Seam: row y = H/2, one cell per ring at x = ring index, walked back out at the
+// end; the final step closes onto the first cell.
+function ringCycle(w, h) {
+  let W = w;
+  let H = h;
+  let transposed = false;
+  if (W > H) {
+    const t = W;
+    W = H;
+    H = t;
+    transposed = true;
+  }
+  if (W % 2 !== 0 || H !== W + 1) return null;
+
+  const R = W / 2;
+  const S = H >> 1;
+  const ring = (x, y) => Math.min(x, y, W - 1 - x, H - 1 - y);
+  const isSeam = (x, y) => y === S && x === ring(x, y);
+  const used = new Uint8Array(W * H);
+  const path = [];
+
+  for (let r = 0; r < R; r++) {
+    const startY = S - (r % 2 === 0 ? 1 : -1);
+    const endY = S + (r % 2 === 0 ? 1 : -1);
+    const ringSize = 2 * (W - 2 * r + H - 2 * r) - 4;
+    const local = new Set();
+    let x = r;
+    let y = startY;
+
+    for (;;) {
+      if (x < 0 || y < 0 || x >= W || y >= H) return null;
+      if (ring(x, y) !== r || isSeam(x, y)) return null;
+      const id = y * W + x;
+      if (used[id] || local.has(id)) return null;
+      local.add(id);
+      used[id] = 1;
+      path.push({ x, y });
+      if (x === r && y === endY) break;
+
+      let next = null;
+      for (const d of DIRS) {
+        const nx = x + d.x;
+        const ny = y + d.y;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        if (ring(nx, ny) !== r || isSeam(nx, ny)) continue;
+        if (local.has(ny * W + nx)) continue;
+        next = [nx, ny];
+        break;
+      }
+      if (!next) return null;
+      [x, y] = next;
+    }
+
+    if (local.size !== ringSize - 1) return null;
+  }
+
+  for (let x = R - 1; x >= 0; x--) {
+    const id = S * W + x;
+    if (used[id]) return null;
+    used[id] = 1;
+    path.push({ x, y: S });
+  }
+
+  if (path.length !== W * H) return null;
+
+  if (transposed) {
+    for (const c of path) {
+      const t = c.x;
+      c.x = c.y;
+      c.y = t;
+    }
+  }
+  return path;
+}
+
+// Serpentine cycle: a fallback for shapes the ring construction cannot close.
+// A Hamiltonian cycle exists whenever one side is even; the 12-wide board gets a
+// full cycle, the odd-by-odd ones get none.
+function serpentineCells(w, h) {
   if (w % 2 === 1 && h % 2 === 1) return null;
-  const ck = `${w}x${h}`;
-  if (cycleCache.has(ck)) return cycleCache.get(ck);
 
   const cells = [{ x: 0, y: 0 }];
   if (h % 2 === 0) {
@@ -67,12 +147,22 @@ function hamiltonCycle(w, h) {
     }
     for (let x = w - 1; x >= 1; x--) cells.push({ x, y: 0 });
   }
+  return cells;
+}
+
+// The order the body grows along, cached per board size.
+export function fillOrder(w, h) {
+  const ck = `${w}x${h}`;
+  if (cycleCache.has(ck)) return cycleCache.get(ck);
+
+  const cells = ringCycle(w, h) || serpentineCells(w, h);
+  if (!cells) return null;
 
   const ids = new Int32Array(w * h).fill(-1);
   for (let i = 0; i < cells.length; i++) ids[cells[i].y * w + cells[i].x] = i;
-  const cycle = { cells, ids, w, h, n: cells.length };
-  cycleCache.set(ck, cycle);
-  return cycle;
+  const order = { cells, ids, w, h, n: cells.length };
+  cycleCache.set(ck, order);
+  return order;
 }
 
 function cycleIndex(cycle, p) {
@@ -119,7 +209,7 @@ function jumpKeepsOrder(cycle, body, target, eats) {
 export function createState(rand = Math.random) {
   const w = CONFIG.boardW;
   const h = CONFIG.boardH;
-  const cycle = hamiltonCycle(w, h);
+  const cycle = fillOrder(w, h);
   const cx = (w - 1) / 2;
   const cy = (h - 1) / 2;
 
@@ -726,150 +816,43 @@ function greedySeek(state, body, rand) {
 function orderedPlanner(state, cycle, body, rand) {
   const moves = orderedMoves(state, cycle, body);
   if (!moves.length) return null;
-  const opening = (state.eaten || 0) === 0;
 
-  // Escape hatch. A direct route can be startable only by a move the ordered
-  // set forbids, and the head then loops without eating. Plain cycle steps
-  // always progress, so walk them until an apple is taken.
-  if ((state.cycleMode || 0) > 0) {
-    state.cycleMode--;
-    moves.sort((a, b) => a.delta - b.delta);
-    const step = moves[0];
+  // Pattern mode: the fill order is followed cell by cell, so the body reads as
+  // one clean ring/spiral instead of a body cut by shortcuts. Apples and bombs
+  // are simply eaten when the order reaches them.
+  const headIdx = cycleIndex(cycle, body[0]);
+  const nextIdx = (headIdx + 1) % cycle.n;
+  const nextCell = cycle.cells[nextIdx];
+  const stepDir = { x: nextCell.x - body[0].x, y: nextCell.y - body[0].y };
+  const step = moves.find((m) => m.idx === nextIdx && m.dir.x === stepDir.x && m.dir.y === stepDir.y);
+  if (step) {
     const after = walk(state, body, [step.dir]);
-    if (!after) return null;
-    remember(state, after[0]);
-    return {
-      dir: { ...step.dir },
-      kind: 'space',
-      closeCall: isCloseCall(state, after),
-      gate: true,
-      routeLen: 0,
-    };
-  }
-
-  // Commit to one target until it is eaten or out of reach. Without this the
-  // snake swaps targets every tick and orbits between two equally near ones.
-  const food = [...(state.bombs || []), ...state.apples];
-  const target = state.target && food.some((a) => same(a, state.target)) ? state.target : null;
-
-  const buildRoutes = (goals) => {
-    const out = [];
-    for (const m of moves) {
-      const after = walk(state, body, [m.dir]);
-      const found = after ? shortestPathTo(state, after, goals, rand) : null;
-      const path = found ? [m.dir, ...found.path] : [m.dir];
-      out.push({
-        dir: m.dir,
-        delta: m.delta,
-        path,
-        len: found ? 1 + found.path.length : Infinity,
-        danger: found ? dangerScore(state, body, path) : 0,
-        target: found ? found.target : null,
-        after,
-      });
-    }
-    return out;
-  };
-
-  // Bombs outrank apples: one is only worth eating if a route to it is safe.
-  const batches = target
-    ? [[state.target]]
-    : [state.bombs || [], state.apples].filter((list) => list.length);
-  let routes = [];
-  for (const goals of batches) {
-    routes = buildRoutes(goals);
-    if (routes.some((r) => Number.isFinite(r.len))) break;
-  }
-
-  const reachable = routes.filter((r) => Number.isFinite(r.len));
-  if (!reachable.length && target) {
-    state.target = null;
-    return orderedPlanner(state, cycle, body, rand);
-  }
-
-  // The committed apple can be reachable only by a route the ordered move set
-  // cannot start, which shows up as a route length that never shrinks while the
-  // head loops. After a few of those, drop the route and walk the cycle, which
-  // visits every cell and therefore reaches the apple anyway.
-  if (reachable.length) {
-    const shortest = reachable.reduce((a, b) => Math.min(a, b.len), Infinity);
-    if (state.bestLen == null || shortest < state.bestLen) {
-      // Real progress. A see-saw that returns to the same length is not.
-      state.bestLen = shortest;
-      state.stuck = 0;
-    } else {
-      state.stuck = (state.stuck || 0) + 1;
-    }
-    if (state.stuck > 8) {
-      state.stuck = 0;
-      state.bestLen = null;
-      state.target = null;
-      state.cycleMode = 220;
+    if (after) {
+      remember(state, after[0]);
+      return {
+        dir: { ...step.dir },
+        kind: 'pattern',
+        closeCall: isCloseCall(state, after),
+        gate: true,
+        routeLen: 0,
+      };
     }
   }
-  let chosen = null;
-  let kind = 'apple';
 
-  if (reachable.length) {
-    reachable.sort((a, b) => a.len - b.len || a.delta - b.delta);
-    const best = reachable[0];
-    const drama = reachable.filter(
-      (r) => r.danger > best.danger && r.len <= best.len + CONFIG.dramaMaxCost && r.danger > 0
-    );
-    const canDrama =
-      drama.length > 0 &&
-      rand() < CONFIG.dramaChance &&
-      (state.dramaCooldown || 0) <= 0 &&
-      !opening;
-    if (canDrama) {
-      chosen = drama[(rand() * drama.length) | 0];
-      kind = 'drama';
-      state.dramaCooldown = CONFIG.dramaCooldown;
-    } else {
-      chosen = best;
-    }
-    state.target = chosen.target || null;
-    if (!state.target) state.bestLen = null;
-  } else {
-    // No apple is reachable by a direct BFS route, which is normal once the
-    // body itself walls off the board. Fall back to cycle discipline: move to
-    // the ordered cell that sits closest to an apple along the cycle, which is
-    // what keeps the snake filling the board instead of circling.
-    kind = 'space';
-    const fresh = moves.filter((m) => thingFresh(state, m.dir, body));
-    const pool = fresh.length ? fresh : moves;
-    const dinner = (state.bombs || []).length ? state.bombs : state.apples;
-    for (const m of pool) m.food = cycleDistanceToFood(cycle, m.idx, dinner);
-    pool.sort((a, b) => a.food - b.food || a.delta - b.delta);
-    const pick = pool[0];
-    chosen = {
-      dir: pick.dir,
-      delta: pick.delta,
-      path: [pick.dir],
-      len: 0,
-      danger: 0,
-      after: walk(state, body, [pick.dir]),
-      head: { x: body[0].x + pick.dir.x, y: body[0].y + pick.dir.y },
-    };
-  }
-
-  if (!chosen || !chosen.after) return null;
-  const closeCall = isCloseCall(state, chosen.after);
-  remember(state, chosen.after[0]);
+  // The next order cell was refused (end of the order, or the body already
+  // covers it). Take the shortest legal ordered step so the snake keeps moving.
+  moves.sort((a, b) => a.delta - b.delta);
+  const pick = moves[0];
+  const after = walk(state, body, [pick.dir]);
+  if (!after) return null;
+  remember(state, after[0]);
   return {
-    dir: { ...chosen.dir },
-    kind,
-    closeCall,
+    dir: { ...pick.dir },
+    kind: 'space',
+    closeCall: isCloseCall(state, after),
     gate: true,
-    routeLen: Number.isFinite(chosen.len) ? chosen.len : 0,
+    routeLen: 0,
   };
-}
-
-// A move that does not revisit a cell the head just left; keeps the snake from
-// replaying the same two-cell oscillation when nothing is reachable.
-function thingFresh(state, dir, body) {
-  const cell = { x: body[0].x + dir.x, y: body[0].y + dir.y };
-  return recentPenalty(state, cell) === 0;
 }
 
 // The planner. Order of business:
@@ -955,7 +938,7 @@ export function chooseMoveDetailed(state, rand = Math.random) {
 
   // Primary: cycle-ordered moves are provably trap-free, and BFS routing
   // inside that set still chases apples directly.
-  const cycle = hamiltonCycle(state.w, state.h);
+  const cycle = fillOrder(state.w, state.h);
   if (cycle && cycleOrdered(cycle, body)) {
     const planned = orderedPlanner(state, cycle, body, rand);
     if (planned) return planned;
@@ -1089,7 +1072,7 @@ export function chooseMoveDetailed(state, rand = Math.random) {
   // the tail, then the move that keeps the most room. Never taken while the
   // round is opening, so the first apple still reads as a direct chase.
   if (!opening) {
-    const cycle = hamiltonCycle(state.w, state.h);
+    const cycle = fillOrder(state.w, state.h);
     if (cycle) {
       const move = cycleSeek(state, cycle, body, rand);
       if (move) {

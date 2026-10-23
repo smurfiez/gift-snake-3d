@@ -9,6 +9,7 @@ import {
   chooseMoveDetailed,
   spawnBomb,
   spawnBombAt,
+  fillOrder,
 } from '../src/logic.js';
 
 const DIRS = [
@@ -66,52 +67,26 @@ test('landing on an occupied cell is refused so the caller can fly it to the mou
   assert.equal(state.bombs.length, 0);
 });
 
-test('ai eats a bomb before an apple at the same distance', () => {
+test('the AI eats a bomb when the fill order reaches it', () => {
   const state = createState(() => 0.5);
-  state.snake = [
-    { x: 5, y: 6 },
-    { x: 4, y: 6 },
-    { x: 3, y: 6 },
-  ];
-  state.dir = { x: 0, y: -1 };
-  state.lastMove = { x: 0, y: -1 };
-  state.apples = [{ id: 1, x: 5, y: 8 }];
-  state.bombs = [{ id: 7, x: 7, y: 6 }];
+  state.slipChance = 0;
+  const order = fillOrder(state.w, state.h);
+  const head = state.snake[0];
+  const idx = order.cells.findIndex((c) => c.x === head.x && c.y === head.y);
+  const target = order.cells[(idx + 4) % order.n];
+  state.bombs = [{ id: 9, x: target.x, y: target.y }];
 
-  const info = chooseMoveDetailed(state, () => 0.99);
-  assert.deepEqual(info.dir, { x: 1, y: 0 }, JSON.stringify(info));
-  assert.equal(info.gate, true);
-});
-
-test('ai eats a bomb when it is the only food and keeps surviving', () => {
-  const state = createState(() => 0.5);
-  state.snake = [
-    { x: 5, y: 6 },
-    { x: 5, y: 7 },
-    { x: 4, y: 7 },
-    { x: 4, y: 6 },
-    { x: 4, y: 5 },
-  ];
-  state.dir = { x: 1, y: 0 };
-  state.lastMove = { x: 1, y: 0 };
-  state.apples = [{ id: 1, x: 11, y: 12 }];
-  state.bombs = [{ id: 2, x: 6, y: 6 }];
-
-  const move = chooseMove(state, () => 0.99);
-  assert.deepEqual(move, { x: 1, y: 0 });
-
-  state.dir = move;
-  const res = step(state);
-  assert.equal(res.bomb.id, 2);
-  assert.equal(res.removed.length, CONFIG.bombCut);
-  assert.equal(state.bombs.length, 0);
-
-  for (let i = 0; i < 200; i++) {
+  let eaten = null;
+  for (let i = 0; i < 8 && !eaten; i++) {
     state.dir = chooseMove(state, () => 0.99);
-    step(state);
-    assert.equal(state.dead, false, `died after the bomb at move ${i}`);
-    assert.equal(state.rescuing, false, `trapped after the bomb at move ${i}`);
+    const res = step(state);
+    if (res.bomb) eaten = res;
   }
+
+  assert.ok(eaten, 'the snake never reached the bomb along the order');
+  assert.equal(eaten.bomb.id, 9);
+  assert.equal(state.bombs.length, 0);
+  assert.equal(state.dead, false);
 });
 
 test('a bomb on the board is passable and leaves the cell empty once eaten', () => {
