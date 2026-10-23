@@ -18,6 +18,8 @@ const GIFTS = {
 
 const hud = {
   len: $('#hud-len'),
+  wins: $('#hud-wins'),
+  losses: $('#hud-losses'),
   fill: $('#len-fill'),
   speed: $('#hud-speed'),
   map: $('#hud-map'),
@@ -1466,6 +1468,7 @@ const bombMeshes = [];
 let appleClock = 0;
 let deadAt = 0;
 let wonAt = 0;
+let roundCounted = false;
 let cdKey = '';
 let clock = 0;
 let shakeMag = 0;
@@ -1793,6 +1796,44 @@ function hideBanner() {
   hud.banner.className = 'banner';
 }
 
+// ---------- win / loss record ----------
+const RECORD_KEY = 'giftsnake.record';
+const record = (() => {
+  try {
+    const raw = localStorage.getItem(RECORD_KEY);
+    const v = raw ? JSON.parse(raw) : null;
+    if (v && Number.isFinite(v.wins) && Number.isFinite(v.losses)) {
+      return { wins: v.wins, losses: v.losses };
+    }
+  } catch (e) {
+    // Private mode or blocked storage: the record still works for this session.
+  }
+  return { wins: 0, losses: 0 };
+})();
+
+function saveRecord() {
+  try {
+    localStorage.setItem(RECORD_KEY, JSON.stringify(record));
+  } catch (e) {
+    // Storage unavailable; nothing to do.
+  }
+}
+
+function refreshRecord() {
+  hud.wins.textContent = record.wins;
+  hud.losses.textContent = record.losses;
+}
+
+// One result per round: a rescue that is bombed free is not a loss, and a
+// manual restart counts as neither.
+function bumpRecord(field) {
+  if (roundCounted) return;
+  roundCounted = true;
+  record[field]++;
+  saveRecord();
+  refreshRecord();
+}
+
 // One big overlay for both end-of-round clocks: the victory lap and the
 // restart. `low` drops it under the STREAMER WINS banner.
 function showCountdown(n, label, low = false) {
@@ -1919,6 +1960,7 @@ function onRescue() {
 }
 
 function onDeath() {
+  bumpRecord('losses');
   deadAt = clock;
   shakeMag = Math.max(shakeMag, 0.75);
   fovPunch(4);
@@ -1929,10 +1971,15 @@ function onDeath() {
     burst(tmpVec, BURST.crash);
   }
   flash('#ff2d55');
-  showBanner('SNAKE CRASHED', `restarting in ${Math.ceil(CONFIG.restartMs / 1000)}s · R`, 'bad');
+  showBanner(
+    'SNAKE CRASHED',
+    `restarting · ${record.wins}W ${record.losses}L`,
+    'bad',
+  );
 }
 
 function onWin() {
+  bumpRecord('wins');
   sfx.win();
   flash('#9dff3d');
   camPunch += 3;
@@ -1945,7 +1992,7 @@ function onWin() {
     f.color = pick(WIN_COLORS);
     f.active = true;
   }
-  showBanner('STREAMER WINS', 'board filled · press R', 'good');
+  showBanner('STREAMER WINS', `board filled · ${record.wins}W ${record.losses}L`, 'good');
 }
 
 // Win bursts run on the frame clock, not timers, so a reset can never inherit
@@ -1968,6 +2015,7 @@ function reset() {
   appleClock = 0;
   deadAt = 0;
   wonAt = 0;
+  roundCounted = false;
   hideCountdown();
   acc = 0;
   camPunch = 0;
@@ -2174,6 +2222,7 @@ applyTheme(0);
 layoutBoard();
 refreshHud();
 renderLeaderboard();
+refreshRecord();
 hideParticles();
 syncSnake(0);
 syncApples(0);

@@ -278,6 +278,10 @@
         font-size: var(--t-lg); color: var(--text);
       }
       .row .stat:last-child b { color: var(--text); }
+      .row.record { margin-top: calc(var(--gap) * 0.6); }
+      .row.record .stat b { font-size: var(--t-md); font-weight: 800; }
+      #hud-wins { color: var(--lime); }
+      #hud-losses { color: var(--magenta); }
 
       .log {
         margin-top: 0; min-height: 0; overflow: hidden;
@@ -659,6 +663,11 @@
         <div class="row">
           <div class="stat"><span class="k">SPEED</span><b id="hud-speed">5.0 c/s</b></div>
           <div class="stat"><span class="k">MAP</span><b id="hud-map">12 × 13</b></div>
+        </div>
+
+        <div class="row record">
+          <div class="stat"><span class="k">WINS</span><b id="hud-wins">0</b></div>
+          <div class="stat"><span class="k">LOSSES</span><b id="hud-losses">0</b></div>
         </div>
 
         <div class="log">

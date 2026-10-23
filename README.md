@@ -34,6 +34,7 @@ Gold, silver, and bronze gifters persist across rounds. Repeated gifts from the 
 - Filling the board starts a 10 second victory lap with a large countdown: the snake keeps moving, the length stops changing, and a bomb cut during the lap cancels the pending win. When the clock runs out the round shows STREAMER WINS, counts 3 seconds, and restarts by itself.
 - A self-collision starts a 10 second rescue window. Viewers can free the snake with a bomb; otherwise the round ends.
 - After a crash the next round starts automatically after 3 seconds.
+- The scoreboard keeps a running wins / losses record across rounds; it is stored in the browser so it survives a reload. Only a real win or a real crash counts — a rescue that a bomb frees is not a loss, and `R` abandons the round without scoring.
 
 ## Tests
 
