@@ -1,8 +1,8 @@
 export const CONFIG = Object.freeze({
   startLength: 3,
   minLength: 3,
-  boardW: 12,
-  boardH: 13,
+  boardW: 16,
+  boardH: 17,
   tickMs: 200,
   minTick: 80,
   maxTick: 400,
@@ -21,9 +21,11 @@ export const CONFIG = Object.freeze({
   // Planner tuning. The margin is the number of free cells the head must keep
   // beyond the snake's own length before a move counts as safe.
   safeMargin: 4,
-  // How far off the fill order the snake may go to eat a bomb. Skipped cells are
-  // reclaimed on a later lap, so this is a pacing knob, not a safety one.
-  bombReach: 10,
+  // How far ahead on the fill order the snake will cut across for an item.
+  // Skipped cells are reclaimed on a later lap, so this is a pacing knob.
+  chaseReach: 14,
+  // How much the window shrinks per cell of body length.
+  chaseFalloff: 12,
   // Chance per move that the AI misjudges and starts playing greedily for the
   // rest of the round. Keeps the snake beatable, so a rescue actually matters.
   slipChance: 0.00006,
@@ -934,16 +936,21 @@ function orderedPlanner(state, cycle, body, rand) {
   // round the snake cuts across for an apple or a bomb; as the body grows the
   // window shrinks, so the closing cells are never stranded behind it. Bombs
   // win ties at the same distance.
-  const reach = Math.max(4, 14 - Math.floor(body.length / 12));
+  // Hard targeting: any item inside the window ahead on the order is worth
+  // leaving the line for. The window shrinks with the body so a long snake
+  // stops spending a whole lap on detours near the finish.
+  const reach = Math.max(4, CONFIG.chaseReach - Math.floor(body.length / CONFIG.chaseFalloff));
+  const bombs = state.bombs || [];
   let target = null;
   let best = Infinity;
-  for (const item of state.apples) {
+  for (const item of bombs.length ? [...bombs, ...state.apples] : state.apples) {
     const idx = cycleIndex(cycle, item);
     if (idx < 0) continue;
     const dist = (idx - baseIdx + cycle.n) % cycle.n;
     if (dist === 0 || dist > reach) continue;
-    if (dist < best) {
-      best = dist;
+    const score = dist - (bombs.includes(item) ? 0.5 : 0);
+    if (score < best) {
+      best = score;
       target = item;
     }
   }
@@ -961,7 +968,7 @@ function orderedPlanner(state, cycle, body, rand) {
         remember(state, after[0]);
         return {
           dir: { ...found.path[0] },
-          kind: 'apple',
+          kind: bombs.includes(target) ? 'bomb' : 'apple',
           closeCall: isCloseCall(state, after),
           gate: true,
           routeLen: found.path.length,

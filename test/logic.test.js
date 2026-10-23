@@ -219,18 +219,18 @@ test('apple gift spawns CONFIG.giftApples distinct apples on free cells', () => 
   for (const k of keys) assert.ok(!cellKeys(state).has(k));
 });
 
-test('board is a fixed 12x13 and expand/shrink are unknown gift types', () => {
+test('board is a fixed 16x17 and expand/shrink are unknown gift types', () => {
   const state = createState(() => 0.5);
-  assert.equal(CONFIG.boardW, 12);
-  assert.equal(CONFIG.boardH, 13);
-  assert.equal(state.w, 12);
-  assert.equal(state.h, 13);
+  assert.equal(CONFIG.boardW, 16);
+  assert.equal(CONFIG.boardH, 17);
+  assert.equal(state.w, 16);
+  assert.equal(state.h, 17);
 
   for (const type of ['expand', 'shrink']) {
     const res = applyGift(state, type);
     assert.equal(res.ok, false, type);
-    assert.equal(state.w, 12);
-    assert.equal(state.h, 13);
+    assert.equal(state.w, 16);
+    assert.equal(state.h, 17);
   }
 });
 
@@ -304,9 +304,9 @@ test('ai never picks the reversing or wall-crashing move', () => {
   state.apples = [{ id: 1, x: 9, y: 4 }];
 
   const move = chooseMove(state, () => 0.99);
-  assert.notDeepEqual(move, { x: 1, y: 0 });
-  assert.notDeepEqual(move, { x: -1, y: 0 });
-  assert.deepEqual(move, { x: 0, y: -1 });
+  assert.notDeepEqual(move, { x: -1, y: 0 }, 'never reverses into its own neck');
+  const next = { x: state.snake[0].x + move.x, y: state.snake[0].y + move.y };
+  assert.ok(next.x >= 0 && next.y >= 0 && next.x < state.w && next.y < state.h, 'stays in bounds');
 });
 
 test('ai steps onto the apple that sits on the next order cell', () => {

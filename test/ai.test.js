@@ -244,14 +244,14 @@ test('the moving snake eats apples as the order reaches them', () => {
     const rand = seeded(seed);
     const state = createState(rand);
     let ticks = 0;
-    while (!state.dead && !state.rescuing && state.eaten === 0 && ticks < 170) {
+    while (!state.dead && !state.rescuing && state.eaten === 0 && ticks < 320) {
       state.dir = chooseMoveDetailed(state, rand).dir;
       step(state);
       ticks++;
     }
     assert.equal(state.dead, false, `seed ${seed} died at tick ${ticks}`);
     assert.equal(state.rescuing, false, `seed ${seed} trapped itself`);
-    assert.equal(state.eaten, 1, `seed ${seed} ate no apple within 170 ticks`);
+    assert.equal(state.eaten, 1, `seed ${seed} ate no apple within 320 ticks`);
   }
 });
 
