@@ -10,6 +10,7 @@ import {
   spawnBombAt,
   appleAt,
   updateRescue,
+  updateWin,
 } from '../src/logic.js';
 
 const cellKeys = (state) => new Set(state.snake.map((s) => `${s.x},${s.y}`));
@@ -230,7 +231,7 @@ test('board is a fixed 12x13 and expand/shrink are unknown gift types', () => {
   }
 });
 
-test('filling the final free cell wins', () => {
+test('filling the board starts a victory lap, then wins', () => {
   const state = createState(() => 0.5);
   state.w = 2;
   state.h = 2;
@@ -245,7 +246,27 @@ test('filling the final free cell wins', () => {
 
   const res = step(state);
   assert.equal(state.snake.length, 4);
-  assert.equal(res.won, true);
+  assert.equal(state.filled, true);
+  assert.equal(state.winMs, CONFIG.winDelayMs);
+  assert.equal(res.won, false);
+  assert.equal(state.won, false);
+
+  const lap = updateWin(state, CONFIG.winDelayMs - 1);
+  assert.equal(lap.won, false);
+  assert.equal(lap.msLeft, 1);
+  assert.equal(state.won, false);
+
+  // The snake keeps moving during the lap and must not die doing it.
+  const move = chooseMove(state, () => 0.99);
+  state.dir = move;
+  const held = step(state);
+  assert.equal(state.dead, false);
+  assert.equal(state.rescuing, false);
+  assert.equal(state.snake.length, 4);
+  assert.ok(held.moved || held.held);
+
+  const done = updateWin(state, 2);
+  assert.equal(done.won, true);
   assert.equal(state.won, true);
 });
 
@@ -531,6 +552,7 @@ const playToEnd = (seed, maxTicks = 20000) => {
   while (!state.won && !state.dead && !state.rescuing && ticks < maxTicks) {
     state.dir = chooseMove(state, rand);
     step(state);
+    updateWin(state, CONFIG.tickMs);
     ticks++;
     clock++;
     if (clock >= appleTicks) {

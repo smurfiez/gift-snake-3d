@@ -508,6 +508,31 @@
           0 7px 14px rgba(94, 56, 80, 0.16);
       }
 
+      .countdown {
+        position: absolute; left: 50%; top: 46%; z-index: 6;
+        display: flex; flex-direction: column; align-items: center;
+        gap: clamp(2px, 0.5cqh, 7px);
+        transform: translate(-50%, -50%) scale(0.92);
+        text-align: center; opacity: 0; pointer-events: none;
+        transition: opacity 160ms ease, transform 220ms cubic-bezier(0.2, 0.9, 0.2, 1);
+      }
+      .countdown.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+      .countdown.low { top: 76%; }
+      .countdown-num {
+        font-size: clamp(96px, 24cqw, 280px);
+        font-weight: 900; line-height: 0.84; letter-spacing: -0.03em;
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+        text-shadow:
+          0 6px 0 rgba(255, 214, 228, 0.95),
+          0 16px 34px rgba(94, 56, 80, 0.22);
+      }
+      .countdown.low .countdown-num { font-size: clamp(56px, 11cqw, 132px); }
+      .countdown-label {
+        font-size: var(--t-xs); font-weight: 800; letter-spacing: 0.24em;
+        text-transform: uppercase; color: var(--muted);
+      }
+
       /* ---------- focus + scrollbars ---------- */
 
       :focus-visible { outline: 2px solid #cf4f82; outline-offset: 2px; }
@@ -591,6 +616,11 @@
       <div class="banner" id="banner" role="status" aria-live="polite">
         <h1 id="banner-title">STREAMER WINS</h1>
         <p id="banner-sub">full board</p>
+      </div>
+
+      <div class="countdown" id="countdown" aria-hidden="true">
+        <span class="countdown-num" id="countdown-num">10</span>
+        <span class="countdown-label" id="countdown-label">VICTORY LAP</span>
       </div>
     </div>
 

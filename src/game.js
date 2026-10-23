@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, createState, step, spawnApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateRescue } from './logic.js';
+import { CONFIG, createState, step, spawnApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateRescue, updateWin } from './logic.js';
 
 const $ = (s) => document.querySelector(s);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -28,6 +28,9 @@ const hud = {
   bannerSub: $('#banner-sub'),
   flash: $('#flash'),
   theme: $('#theme'),
+  cd: $('#countdown'),
+  cdNum: $('#countdown-num'),
+  cdLabel: $('#countdown-label'),
 };
 
 // ---------- audio (synthesized, no asset files) ----------
@@ -1462,6 +1465,8 @@ const appleMeshes = [];
 const bombMeshes = [];
 let appleClock = 0;
 let deadAt = 0;
+let wonAt = 0;
+let cdKey = '';
 let clock = 0;
 let shakeMag = 0;
 
@@ -1788,6 +1793,26 @@ function hideBanner() {
   hud.banner.className = 'banner';
 }
 
+// One big overlay for both end-of-round clocks: the victory lap and the
+// restart. `low` drops it under the STREAMER WINS banner.
+function showCountdown(n, label, low = false) {
+  const k = `${n}|${label}|${low ? 1 : 0}`;
+  if (cdKey !== k) {
+    cdKey = k;
+    hud.cdNum.textContent = n;
+    hud.cdLabel.textContent = label;
+    hud.cd.classList.toggle('low', low);
+  }
+  hud.cd.classList.add('show');
+  hud.cd.setAttribute('aria-hidden', 'false');
+}
+
+function hideCountdown() {
+  cdKey = '';
+  hud.cd.classList.remove('show');
+  hud.cd.setAttribute('aria-hidden', 'true');
+}
+
 // ---------- gifts ----------
 function fovPunch(v) {
   fovKick = Math.max(-6, Math.min(6, fovKick + v));
@@ -1942,6 +1967,8 @@ function reset() {
   yawReady = false;
   appleClock = 0;
   deadAt = 0;
+  wonAt = 0;
+  hideCountdown();
   acc = 0;
   camPunch = 0;
   fovKick = 0;
@@ -2009,6 +2036,20 @@ function frame(ms) {
     if (r.died) onDeath();
   }
 
+  const win = updateWin(state, dt * 1000);
+  if (win.won) {
+    wonAt = clock;
+    onWin();
+  }
+  if (state.filled && !state.won) {
+    showCountdown(Math.max(1, Math.ceil(state.winMs / 1000)), 'VICTORY LAP');
+  }
+  if (state.won) {
+    const left = Math.max(1, Math.ceil(CONFIG.restartMs / 1000 - (clock - wonAt)));
+    showCountdown(left, 'NEXT ROUND', true);
+    if (clock - wonAt > CONFIG.restartMs / 1000) reset();
+  }
+
   const live = !state.dead && !state.won && !state.rescuing;
 
   if (live) {
@@ -2049,7 +2090,6 @@ function frame(ms) {
         if (res.rescue) onRescue();
         else onDeath();
       }
-      if (res.won) onWin();
       if (state.dead || state.won || state.rescuing) {
         acc = 0;
         break;

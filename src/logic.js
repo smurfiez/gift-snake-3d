@@ -17,6 +17,9 @@ export const CONFIG = Object.freeze({
   maxBombs: 3,
   rescueMs: 10000,
   restartMs: 3000,
+  // After the board fills, the snake keeps moving for this long before the win
+  // is awarded, so the round ends on a visible victory lap instead of a freeze.
+  winDelayMs: 10000,
   // Planner tuning. The margin is the number of free cells the head must keep
   // beyond the snake's own length before a move counts as safe.
   safeMargin: 4,
@@ -150,6 +153,8 @@ export function createState(rand = Math.random) {
     tickMs: CONFIG.tickMs,
     dead: false,
     won: false,
+    filled: false,
+    winMs: 0,
     rescuing: false,
     rescueMs: 0,
     bombs: [],
@@ -260,6 +265,8 @@ export function step(state) {
   const next = { x: head.x + state.dir.x, y: head.y + state.dir.y };
 
   if (!inBounds(state, next)) {
+    // On a full board there is nowhere to go; hold rather than lose the win.
+    if (state.filled) return { moved: false, held: true, died: false };
     state.dead = true;
     return { moved: false, died: true, reason: 'wall' };
   }
@@ -268,6 +275,7 @@ export function step(state) {
   const bomb = bombAt(state, next);
   const body = apple ? state.snake : state.snake.slice(0, -1);
   if (body.some((s) => same(s, next))) {
+    if (state.filled) return { moved: false, held: true, died: false };
     state.rescuing = true;
     state.rescueMs = CONFIG.rescueMs;
     return { moved: false, died: true, reason: 'self', rescue: true };
@@ -282,8 +290,37 @@ export function step(state) {
   let removed = [];
   if (bomb) removed = eatBomb(state, bomb);
 
-  if (state.snake.length >= state.w * state.h) state.won = true;
-  return { moved: true, ate: apple, bomb, removed, died: false, won: state.won };
+  if (state.snake.length >= state.w * state.h) {
+    if (!state.filled) {
+      state.filled = true;
+      state.winMs = CONFIG.winDelayMs;
+    }
+  } else if (state.filled) {
+    // A bomb cut the snake back below a full board: the lap is off.
+    state.filled = false;
+    state.winMs = 0;
+  }
+
+  return {
+    moved: true,
+    ate: apple,
+    bomb,
+    removed,
+    died: false,
+    won: state.won,
+    filled: state.filled,
+  };
+}
+
+// Victory lap clock. The win is only awarded once the full-board snake has kept
+// moving for CONFIG.winDelayMs.
+export function updateWin(state, dtMs) {
+  if (state.won || !state.filled) return { won: false };
+  state.winMs -= dtMs;
+  if (state.winMs > 0) return { won: false, msLeft: state.winMs };
+  state.winMs = 0;
+  state.won = true;
+  return { won: true };
 }
 
 // Self-collision freezes the snake; a bomb shortens it and ends the freeze.

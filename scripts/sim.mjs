@@ -1,6 +1,6 @@
 // Seeded simulation of normal play (no gifts): the AI drives itself until it
 // wins or dies. Run with `node scripts/sim.mjs [rounds]`.
-import { CONFIG, createState, step, chooseMoveDetailed, spawnApple } from '../src/logic.js';
+import { CONFIG, createState, step, chooseMoveDetailed, spawnApple, updateWin } from '../src/logic.js';
 
 export function seeded(seed) {
   let a = seed >>> 0;
@@ -38,6 +38,7 @@ export function playRound(seed, maxTicks = 20000) {
     if (!info.gate && !['slip', 'finish', 'stuck'].includes(info.kind)) gateViolations++;
     state.dir = info.dir;
     const res = step(state);
+    updateWin(state, CONFIG.tickMs);
     ticks++;
     if (res.ate && firstAppleTick === null) firstAppleTick = ticks;
     if (res.reason === 'self') selfDeaths++;
