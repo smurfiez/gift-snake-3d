@@ -6,6 +6,7 @@ import {
   step,
   applyGift,
   chooseMove,
+  chooseMoveDetailed,
   spawnApple,
   spawnBombAt,
   spawnGiftApple,
@@ -317,37 +318,69 @@ test('ai steps onto the apple that sits on the next order cell', () => {
   assert.deepEqual(move, state.dir);
 });
 
-test('the AI follows the fill order instead of detouring to an apple', () => {
-  // An apple next to the head does not pull the snake off the order when the
-  // move cannot rejoin at the next order cell.
+test('the AI cuts across for an apple that is close ahead on the order', () => {
+  // Early in a round an apple a few cells ahead is worth leaving the line for:
+  // the skipped cells are reclaimed on the next lap.
   const state = createState(() => 0.5);
   state.slipChance = 0;
   const order = fillOrder(state.w, state.h, state.variant);
-  const head = state.snake[0];
-  const idx = order.cells.findIndex((c) => c.x === head.x && c.y === head.y);
-  const next = order.cells[(idx + 1) % order.n];
-  const bodyKeys = cellKeys(state);
+  const n = order.n;
   const near = [
     { x: 1, y: 0 },
     { x: -1, y: 0 },
     { x: 0, y: 1 },
     { x: 0, y: -1 },
   ];
-  const side = near.find((d) => {
-    const c = { x: head.x + d.x, y: head.y + d.y };
-    if (c.x < 0 || c.y < 0 || c.x >= state.w || c.y >= state.h) return false;
-    if (bodyKeys.has(`${c.x},${c.y}`)) return false;
-    if (c.x === next.x && c.y === next.y) return false;
-    // Must NOT be on the way back to the next order cell.
-    return Math.abs(c.x - next.x) + Math.abs(c.y - next.y) !== 1;
-  });
-  assert.ok(side, 'expected a free cell that is not a rejoin point');
-  state.apples = [{ id: 1, x: head.x + side.x, y: head.y + side.y }];
+
+  // Find a head position with a shortcut neighbour 2..10 steps ahead on the
+  // order, so the chase is one step instead of following the line.
+  let found = null;
+  for (let i = 2; i < n && !found; i++) {
+    const head = order.cells[i];
+    for (const d of near) {
+      const c = { x: head.x + d.x, y: head.y + d.y };
+      if (c.x < 0 || c.y < 0 || c.x >= state.w || c.y >= state.h) continue;
+      const idx = order.ids[c.y * state.w + c.x];
+      if (idx < 0) continue;
+      const dist = (idx - i + n) % n;
+      if (dist > 1 && dist <= 10) {
+        found = { i, head, d, cell: c };
+        break;
+      }
+    }
+  }
+  assert.ok(found, 'expected a shortcut neighbour on the order');
+
+  state.snake = [
+    { ...found.head },
+    { ...order.cells[(found.i - 1 + n) % n] },
+    { ...order.cells[(found.i - 2 + n) % n] },
+  ];
+  state.dir = { x: 0, y: 0 };
+  state.lastMove = { x: 0, y: 0 };
+  state.apples = [{ id: 1, x: found.cell.x, y: found.cell.y }];
+  state.bombs = [];
+  state.eaten = 1;
+
+  const info = chooseMoveDetailed(state, () => 0.99);
+  assert.equal(info.kind, 'apple');
+  assert.deepEqual(info.dir, found.d);
+  assert.equal(info.gate, true);
+});
+
+test('the AI ignores an apple far ahead and keeps the line', () => {
+  const state = createState(() => 0.5);
+  state.slipChance = 0;
+  const order = fillOrder(state.w, state.h, state.variant);
+  const head = state.snake[0];
+  const base = order.ids[head.y * state.w + head.x];
+  const far = order.cells[(base + 40) % order.n];
+  state.apples = [{ id: 1, x: far.x, y: far.y }];
   state.bombs = [];
 
+  const next = order.cells[(base + 1) % order.n];
   const move = chooseMove(state, () => 0.99);
   assert.deepEqual(move, { x: next.x - head.x, y: next.y - head.y });
-  assert.notDeepEqual(move, side);
 });
 
 test('spawning fails when the board is full', () => {

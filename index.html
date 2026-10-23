@@ -238,32 +238,6 @@
         color: var(--text);
       }
 
-      .bar {
-        position: relative;
-        height: clamp(7px, 0.85cqh, 16px);
-        border-radius: 99px;
-        border: 1px solid rgba(120, 82, 106, 0.12);
-        background: rgba(120, 82, 106, 0.08);
-        overflow: hidden;
-      }
-      .bar i {
-        position: relative;
-        display: block; height: 100%; width: 0%;
-        background: linear-gradient(90deg, var(--cyan), var(--amber) 58%, var(--magenta));
-        box-shadow: 0 2px 6px -2px rgba(255, 143, 174, 0.45);
-        transition: width 180ms ease;
-        overflow: hidden;
-      }
-      .bar i::after {
-        content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 38%;
-        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
-        animation: barSheen 3.8s ease-in-out infinite;
-      }
-      @keyframes barSheen {
-        0% { transform: translateX(-120%); }
-        62%, 100% { transform: translateX(320%); }
-      }
-
       .row {
         display: grid; grid-template-columns: 1fr 1fr; gap: 0;
         padding-top: var(--gap);
@@ -278,6 +252,10 @@
         font-size: var(--t-lg); color: var(--text);
       }
       .row .stat:last-child b { color: var(--text); }
+      .row.eats { border-top: none; padding-top: 0; }
+      .row.eats .stat b { font-size: var(--t-lead); font-weight: 900; }
+      #hud-apples { color: var(--lime); }
+      #hud-bombs { color: var(--orange); }
       .row.record { margin-top: calc(var(--gap) * 0.6); }
       .row.record .stat b { font-size: var(--t-md); font-weight: 800; }
       #hud-wins { color: var(--lime); }
@@ -554,6 +532,26 @@
       }
       .countdown.low .countdown-label { letter-spacing: 0.14em; }
 
+      .winsummary {
+        position: absolute; right: clamp(10px, 1.4cqw, 22px); top: 46%;
+        transform: translateY(-50%); z-index: 6;
+        display: none; flex-direction: column; gap: 6px;
+        min-width: clamp(150px, 18cqw, 240px);
+        padding: clamp(10px, 1.2cqh, 16px) clamp(12px, 1.2cqw, 18px);
+        border-radius: 14px; background: #fffaf6; border: 1px solid var(--line);
+        box-shadow: 0 20px 44px -26px rgba(94, 56, 80, 0.45);
+        font-size: var(--t-xs); color: var(--text);
+      }
+      .winsummary.show { display: flex; }
+      .winsummary h3 {
+        margin: 0; font-size: var(--t-micro); font-weight: 800;
+        letter-spacing: 0.16em; color: var(--muted);
+      }
+      .winsummary ol { margin: 0 0 4px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
+      .winsummary li { display: flex; justify-content: space-between; gap: 10px; font-weight: 700; }
+      .winsummary li span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
+      .winsummary .empty { margin-bottom: 4px; color: var(--faint); font-weight: 600; }
+
       .debug {
         position: absolute; left: clamp(10px, 1.4cqw, 22px); top: clamp(52px, 8cqh, 78px); z-index: 8;
         display: none; flex-direction: column; gap: 8px;
@@ -635,7 +633,6 @@
           transition-duration: 0.001ms !important;
         }
         .banner { transform: translate(-50%, -50%) scale(1); }
-        .bar i::after { display: none; }
       }
     </style>
   </head>
@@ -657,6 +654,8 @@
         <h1 id="banner-title">STREAMER WINS</h1>
         <p id="banner-sub">full board</p>
       </div>
+
+      <div class="winsummary" id="win-summary" aria-hidden="true"></div>
 
       <div class="debug" id="debug" aria-hidden="true">
         <div class="debug-head">DEBUG · D</div>
@@ -699,11 +698,10 @@
           <span class="panel-meta">WIN · FULL BOARD</span>
         </div>
 
-        <div class="stat stat-lead">
-          <span class="k">LENGTH</span>
-          <b id="hud-len">3 / 100</b>
+        <div class="row eats">
+          <div class="stat"><span class="k">APPLES EATEN</span><b id="hud-apples">0</b></div>
+          <div class="stat"><span class="k">BOMBS EATEN</span><b id="hud-bombs">0</b></div>
         </div>
-        <div class="bar" aria-hidden="true"><i id="len-fill"></i></div>
 
         <div class="row">
           <div class="stat"><span class="k">SPEED</span><b id="hud-speed">5.0 c/s</b></div>

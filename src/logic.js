@@ -21,6 +21,9 @@ export const CONFIG = Object.freeze({
   // Planner tuning. The margin is the number of free cells the head must keep
   // beyond the snake's own length before a move counts as safe.
   safeMargin: 4,
+  // How far off the fill order the snake may go to eat a bomb. Skipped cells are
+  // reclaimed on a later lap, so this is a pacing knob, not a safety one.
+  bombReach: 10,
   // Chance per move that the AI misjudges and starts playing greedily for the
   // rest of the round. Keeps the snake beatable, so a rescue actually matters.
   slipChance: 0.00006,
@@ -429,6 +432,7 @@ export function spawnBomb(state) {
 // What eating a bomb does: drop it from the board and cut the tail. Also used
 // when a dropped bomb lands on the snake and is delivered straight to the head.
 export function eatBomb(state, bomb) {
+  state.bombsEaten = (state.bombsEaten || 0) + 1;
   if (bomb && Array.isArray(state.bombs)) {
     const at = state.bombs.indexOf(bomb);
     if (at >= 0) state.bombs.splice(at, 1);
@@ -925,6 +929,49 @@ function orderedPlanner(state, cycle, body, rand) {
   if (baseIdx < 0) return null;
 
   const nextCell = cycle.cells[(baseIdx + 1) % cycle.n];
+
+  // Items first, but only while they are close ahead on the order. Early in a
+  // round the snake cuts across for an apple or a bomb; as the body grows the
+  // window shrinks, so the closing cells are never stranded behind it. Bombs
+  // win ties at the same distance.
+  const reach = Math.max(4, 14 - Math.floor(body.length / 12));
+  const bombs = state.bombs || [];
+  const goals = bombs.length ? [...bombs, ...state.apples] : state.apples;
+  let target = null;
+  let best = Infinity;
+  for (const item of goals) {
+    const idx = cycleIndex(cycle, item);
+    if (idx < 0) continue;
+    const dist = (idx - baseIdx + cycle.n) % cycle.n;
+    if (dist === 0 || dist > reach) continue;
+    const score = dist - (bombs.includes(item) ? 0.5 : 0);
+    if (score < best) {
+      best = score;
+      target = item;
+    }
+  }
+
+  if (target) {
+    const found = shortestPathTo(state, body, [target], rand);
+    if (found && found.path.length) {
+      // The first step must also move forward on the order, or the body stops
+      // being ordered and the planner falls back to the generic one.
+      const first = { x: head.x + found.path[0].x, y: head.y + found.path[0].y };
+      const firstIdx = cycleIndex(cycle, first);
+      const stepDist = firstIdx < 0 ? Infinity : (firstIdx - baseIdx + cycle.n) % cycle.n;
+      const after = walk(state, body, found.path);
+      if (stepDist > 0 && stepDist <= reach && after && keepsTail(state, after)) {
+        remember(state, after[0]);
+        return {
+          dir: { ...found.path[0] },
+          kind: bombs.includes(target) ? 'bomb' : 'apple',
+          closeCall: isCloseCall(state, after),
+          gate: true,
+          routeLen: found.path.length,
+        };
+      }
+    }
+  }
 
   // Pattern mode: the next order cell, and nothing else. Leaving the order would
   // skip a cell, and a skipped cell can only be reclaimed a full lap later.

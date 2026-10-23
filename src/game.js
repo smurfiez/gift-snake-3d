@@ -17,10 +17,10 @@ const GIFTS = {
 };
 
 const hud = {
-  len: $('#hud-len'),
+  apples: $('#hud-apples'),
+  bombs: $('#hud-bombs'),
   wins: $('#hud-wins'),
   losses: $('#hud-losses'),
-  fill: $('#len-fill'),
   speed: $('#hud-speed'),
   map: $('#hud-map'),
   toasts: $('#toasts'),
@@ -30,6 +30,7 @@ const hud = {
   bannerSub: $('#banner-sub'),
   flash: $('#flash'),
   theme: $('#theme'),
+  winSummary: $('#win-summary'),
   cd: $('#countdown'),
   cdNum: $('#countdown-num'),
   cdLabel: $('#countdown-label'),
@@ -1281,6 +1282,7 @@ function flushAppleBatch(viewer) {
   const label = apples.length > 1 ? `${apples.length} apples` : '1 apple';
   toast(`🍎 <b>@${viewer}</b> dropped ${label}`, 'good');
   logGift('apple', viewer, apples.length);
+  countGift(viewer, 'apple', apples.length);
   refreshHud();
 }
 
@@ -1748,9 +1750,8 @@ function updateCamera(dt) {
 
 // ---------- hud ----------
 function refreshHud() {
-  const total = state.w * state.h;
-  hud.len.textContent = `${state.snake.length} / ${total}`;
-  hud.fill.style.width = `${Math.min(100, (state.snake.length / total) * 100)}%`;
+  hud.apples.textContent = state.eaten || 0;
+  hud.bombs.textContent = state.bombsEaten || 0;
   hud.speed.textContent = `${((1000 / state.tickMs) * debugSpeed).toFixed(1)} c/s`;
   hud.map.textContent = `${state.w} × ${state.h}`;
 }
@@ -1848,6 +1849,35 @@ function toggleDebug(force) {
 }
 
 // ---------- win / loss record ----------
+// Per-round gift counts, for the win summary.
+const roundGifts = new Map();
+
+function countGift(viewer, type, n = 1) {
+  const r = roundGifts.get(viewer) || { apple: 0, bomb: 0 };
+  r[type] += n;
+  roundGifts.set(viewer, r);
+}
+
+function renderWinSummary() {
+  const top = (type) =>
+    [...roundGifts.entries()]
+      .map(([v, c]) => ({ v, n: c[type] }))
+      .filter((e) => e.n > 0)
+      .sort((a, b) => b.n - a.n)
+      .slice(0, 3);
+  const list = (rows) =>
+    rows.length
+      ? `<ol>${rows
+          .map((r) => `<li><span>@${r.v}</span><span>×${r.n}</span></li>`)
+          .join('')}</ol>`
+      : '<div class="empty">no gifts</div>';
+  hud.winSummary.innerHTML =
+    `<h3>TOP APPLE GIFTERS</h3>${list(top('apple'))}` +
+    `<h3>TOP BOMB GIFTERS</h3>${list(top('bomb'))}`;
+  hud.winSummary.classList.add('show');
+  hud.winSummary.setAttribute('aria-hidden', 'false');
+}
+
 const RECORD_KEY = 'giftsnake.record';
 const record = (() => {
   try {
@@ -1964,6 +1994,7 @@ function sendGift(type) {
       flash('#ff8a3d', '33');
       toast(`💣 <b>@${viewer}</b> dropped a bomb`, 'bad');
       logGift(type, viewer);
+      countGift(viewer, 'bomb');
       refreshHud();
     }
   } else if (type === 'speed' || type === 'slow') {
@@ -2043,6 +2074,7 @@ function onWin() {
     f.color = pick(WIN_COLORS);
     f.active = true;
   }
+  renderWinSummary();
   showBanner('STREAMER WINS', `board filled · ${record.wins}W ${record.losses}L`, 'good');
 }
 
@@ -2067,6 +2099,9 @@ function reset() {
   deadAt = 0;
   wonAt = 0;
   roundCounted = false;
+  roundGifts.clear();
+  hud.winSummary.classList.remove('show');
+  hud.winSummary.setAttribute('aria-hidden', 'true');
   giftClock = 0;
   applyDebug();
   hideCountdown();
