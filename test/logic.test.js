@@ -1,0 +1,470 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  CONFIG,
+  createState,
+  step,
+  applyGift,
+  chooseMove,
+  spawnApple,
+  appleAt,
+  updateRescue,
+} from '../src/logic.js';
+
+const cellKeys = (state) => new Set(state.snake.map((s) => `${s.x},${s.y}`));
+
+const tailReachable = (state) => {
+  const blocked = new Set(state.snake.slice(0, -1).map((s) => `${s.x},${s.y}`));
+  const head = state.snake[0];
+  const tail = state.snake[state.snake.length - 1];
+  const seen = new Set([`${head.x},${head.y}`]);
+  const queue = [head];
+  while (queue.length) {
+    const p = queue.shift();
+    if (p.x === tail.x && p.y === tail.y) return true;
+    for (const d of [{ x: 0, y: -1 }, { x: 1, y: 0 }, { x: 0, y: 1 }, { x: -1, y: 0 }]) {
+      const c = { x: p.x + d.x, y: p.y + d.y };
+      const k = `${c.x},${c.y}`;
+      if (c.x < 0 || c.y < 0 || c.x >= state.w || c.y >= state.h) continue;
+      if (seen.has(k) || blocked.has(k)) continue;
+      seen.add(k);
+      queue.push(c);
+    }
+  }
+  return false;
+};
+
+test('fresh state starts at configured length with one apple off-snake', () => {
+  const state = createState(() => 0.5);
+  assert.equal(state.snake.length, CONFIG.startLength);
+  assert.equal(state.apples.length, 1);
+  assert.ok(!cellKeys(state).has(`${state.apples[0].x},${state.apples[0].y}`));
+});
+
+test('step moves head one cell in current direction', () => {
+  const state = createState(() => 0.5);
+  const head = { ...state.snake[0] };
+  const dir = { ...state.dir };
+  const res = step(state);
+  assert.ok(res.moved);
+  assert.deepEqual(state.snake[0], { x: head.x + dir.x, y: head.y + dir.y });
+});
+
+test('hitting the wall kills the snake', () => {
+  const state = createState(() => 0.5);
+  let res = { died: false };
+  for (let i = 0; i < 20 && !state.dead; i++) res = step(state);
+  assert.equal(state.dead, true);
+  assert.equal(res.died, true);
+  assert.equal(res.reason, 'wall');
+});
+
+test('running into own body starts a rescue instead of killing the snake', () => {
+  const state = createState(() => 0.5);
+  state.snake = [
+    { x: 2, y: 2 },
+    { x: 2, y: 3 },
+    { x: 1, y: 3 },
+    { x: 1, y: 2 },
+  ];
+  state.dir = { x: 0, y: 1 };
+  state.apples = [];
+  const before = state.snake.map((s) => ({ ...s }));
+  const res = step(state);
+  assert.equal(res.died, true);
+  assert.equal(res.reason, 'self');
+  assert.equal(res.rescue, true);
+  assert.equal(res.moved, false);
+  assert.equal(state.dead, false);
+  assert.equal(state.rescuing, true);
+  assert.equal(state.rescueMs, CONFIG.rescueMs);
+  assert.deepEqual(state.snake, before);
+  assert.deepEqual(chooseMove(state), state.dir);
+});
+
+test('updateRescue expires into death after rescueMs', () => {
+  const state = createState(() => 0.5);
+  state.snake = [
+    { x: 2, y: 2 },
+    { x: 2, y: 3 },
+    { x: 1, y: 3 },
+    { x: 1, y: 2 },
+  ];
+  state.dir = { x: 0, y: 1 };
+  state.apples = [];
+  step(state);
+
+  const idle = updateRescue(state, CONFIG.rescueMs - 1);
+  assert.equal(idle.died, false);
+  assert.equal(idle.msLeft, 1);
+  assert.equal(state.dead, false);
+  assert.equal(state.rescuing, true);
+
+  const expired = updateRescue(state, 1);
+  assert.equal(expired.died, true);
+  assert.equal(state.rescuing, false);
+  assert.equal(state.rescueMs, 0);
+  assert.equal(state.dead, true);
+});
+
+test('only a bomb is accepted while rescuing, and it ends the rescue', () => {
+  const state = createState(() => 0.5);
+  state.snake = [
+    { x: 2, y: 2 },
+    { x: 2, y: 3 },
+    { x: 1, y: 3 },
+    { x: 1, y: 2 },
+    { x: 1, y: 1 },
+    { x: 0, y: 1 },
+  ];
+  state.dir = { x: 0, y: 1 };
+  state.apples = [];
+  const tick = state.tickMs;
+  step(state);
+
+  for (const type of ['apple', 'speed', 'slow']) {
+    const res = applyGift(state, type);
+    assert.equal(res.ok, false, type);
+    assert.equal(state.apples.length, 0, type);
+    assert.equal(state.tickMs, tick, type);
+    assert.equal(state.rescuing, true, type);
+  }
+
+  const res = applyGift(state, 'bomb');
+  assert.equal(res.ok, true);
+  assert.equal(res.removed.length, CONFIG.bombCut);
+  assert.equal(state.rescuing, false);
+  assert.equal(state.rescueMs, 0);
+  assert.equal(state.dead, false);
+  assert.equal(updateRescue(state, CONFIG.rescueMs).died, false);
+});
+
+test('eating an apple adds exactly one segment', () => {
+  const state = createState(() => 0.5);
+  state.apples = [
+    { id: 99, x: state.snake[0].x + state.dir.x, y: state.snake[0].y + state.dir.y },
+  ];
+  const before = state.snake.length;
+  const res = step(state);
+  assert.equal(res.ate.id, 99);
+  assert.equal(state.snake.length, before + 1);
+  assert.equal(state.apples.length, 0);
+});
+
+test('bomb cuts two segments and never drops below the minimum', () => {
+  const state = createState(() => 0.5);
+  assert.equal(applyGift(state, 'bomb').ok, false);
+  assert.equal(state.snake.length, CONFIG.minLength);
+
+  for (let i = 0; i < 4; i++) state.snake.push({ x: 0, y: 0 });
+  const res = applyGift(state, 'bomb');
+  assert.equal(res.ok, true);
+  assert.equal(res.removed.length, CONFIG.bombCut);
+  assert.equal(state.snake.length, CONFIG.minLength + 2);
+});
+
+test('apple gift spawns CONFIG.giftApples distinct apples on free cells', () => {
+  const state = createState(() => 0.25);
+  const before = state.apples.length;
+  const res = applyGift(state, 'apple');
+  assert.equal(res.ok, true);
+  assert.equal(state.apples.length, before + CONFIG.giftApples);
+  const keys = new Set(state.apples.map((a) => `${a.x},${a.y}`));
+  assert.equal(keys.size, state.apples.length);
+  for (const k of keys) assert.ok(!cellKeys(state).has(k));
+});
+
+test('board is a fixed 12x13 and expand/shrink are unknown gift types', () => {
+  const state = createState(() => 0.5);
+  assert.equal(CONFIG.boardW, 12);
+  assert.equal(CONFIG.boardH, 13);
+  assert.equal(state.w, 12);
+  assert.equal(state.h, 13);
+
+  for (const type of ['expand', 'shrink']) {
+    const res = applyGift(state, type);
+    assert.equal(res.ok, false, type);
+    assert.equal(state.w, 12);
+    assert.equal(state.h, 13);
+  }
+});
+
+test('filling the final free cell wins', () => {
+  const state = createState(() => 0.5);
+  state.w = 2;
+  state.h = 2;
+  state.snake = [
+    { x: 0, y: 1 },
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+  ];
+  state.dir = { x: 1, y: 0 };
+  state.lastMove = { x: 1, y: 0 };
+  state.apples = [{ id: 7, x: 1, y: 1 }];
+
+  const res = step(state);
+  assert.equal(state.snake.length, 4);
+  assert.equal(res.won, true);
+  assert.equal(state.won, true);
+});
+
+test('ai never picks the reversing or wall-crashing move', () => {
+  const state = createState(() => 0.5);
+  state.snake = [
+    { x: 9, y: 5 },
+    { x: 8, y: 5 },
+    { x: 7, y: 5 },
+  ];
+  state.dir = { x: 1, y: 0 };
+  state.lastMove = { x: 1, y: 0 };
+  state.apples = [{ id: 1, x: 9, y: 4 }];
+
+  const move = chooseMove(state, () => 0.99);
+  assert.notDeepEqual(move, { x: 1, y: 0 });
+  assert.notDeepEqual(move, { x: -1, y: 0 });
+  assert.deepEqual(move, { x: 0, y: -1 });
+});
+
+test('ai steps onto an adjacent apple', () => {
+  const state = createState(() => 0.5);
+  state.apples = [{ id: 2, x: state.snake[0].x, y: state.snake[0].y - 1 }];
+  const move = chooseMove(state, () => 0.99);
+  assert.deepEqual(move, { x: 0, y: -1 });
+});
+
+test('food comes before the Hamiltonian step', () => {
+  // Fresh snake sits on the cycle, so state.dir is its Hamiltonian next step.
+  // The apple is placed one perpendicular cell away: food-first must win.
+  const state = createState(() => 0.5);
+  const head = state.snake[0];
+  const bodyKeys = cellKeys(state);
+  const perps = state.dir.x !== 0
+    ? [{ x: 0, y: -1 }, { x: 0, y: 1 }]
+    : [{ x: -1, y: 0 }, { x: 1, y: 0 }];
+  const side = perps.find(
+    (d) =>
+      head.x + d.x >= 0 &&
+      head.y + d.y >= 0 &&
+      head.x + d.x < state.w &&
+      head.y + d.y < state.h &&
+      !bodyKeys.has(`${head.x + d.x},${head.y + d.y}`),
+  );
+  assert.ok(side, 'expected a free cell next to the head');
+  state.apples = [{ id: 1, x: head.x + side.x, y: head.y + side.y }];
+
+  const move = chooseMove(state, () => 0.99);
+  assert.deepEqual(move, side);
+  assert.notDeepEqual(move, state.dir);
+});
+
+test('spawning fails when the board is full', () => {
+  const state = createState(() => 0.5);
+  state.w = 1;
+  state.h = 1;
+  state.snake = [{ x: 0, y: 0 }];
+  state.apples = [];
+  assert.equal(spawnApple(state), null);
+});
+
+test('appleAt finds apples by coordinate', () => {
+  const state = createState(() => 0.5);
+  const a = state.apples[0];
+  assert.equal(appleAt(state, { x: a.x, y: a.y }), a);
+  assert.equal(appleAt(state, { x: -1, y: -1 }), null);
+});
+
+test('speed clamps at minTick and reports not ok at the clamp', () => {
+  const state = createState(() => 0.5);
+  state.tickMs = CONFIG.minTick + CONFIG.speedStep;
+  const res = applyGift(state, 'speed');
+  assert.equal(res.ok, true);
+  assert.equal(state.tickMs, CONFIG.minTick);
+
+  const again = applyGift(state, 'speed');
+  assert.equal(again.ok, false);
+  assert.equal(again.tickMs, CONFIG.minTick);
+  assert.equal(state.tickMs, CONFIG.minTick);
+});
+
+test('slow clamps at maxTick and reports not ok at the clamp', () => {
+  const state = createState(() => 0.5);
+  state.tickMs = CONFIG.maxTick - CONFIG.slowStep;
+  const res = applyGift(state, 'slow');
+  assert.equal(res.ok, true);
+  assert.equal(state.tickMs, CONFIG.maxTick);
+
+  const again = applyGift(state, 'slow');
+  assert.equal(again.ok, false);
+  assert.equal(again.tickMs, CONFIG.maxTick);
+  assert.equal(state.tickMs, CONFIG.maxTick);
+});
+
+test('chooseMove with no apples returns a valid direction', () => {
+  const state = createState(() => 0.5);
+  state.apples = [];
+  const move = chooseMove(state, () => 0.99);
+  const valid = [
+    { x: 0, y: -1 },
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+  ];
+  assert.ok(valid.some((d) => d.x === move.x && d.y === move.y));
+  assert.ok(Number.isFinite(move.x) && Number.isFinite(move.y));
+});
+
+test('gifts do not mutate the board while dead or won', () => {
+  for (const flag of ['dead', 'won']) {
+    for (const type of ['apple', 'bomb', 'speed', 'slow']) {
+      const state = createState(() => 0.5);
+      state.snake = [
+        { x: 5, y: 5 },
+        { x: 4, y: 5 },
+        { x: 3, y: 5 },
+        { x: 2, y: 5 },
+      ];
+      state.apples = [{ id: 1, x: 0, y: 0 }];
+      state.tickMs = CONFIG.tickMs;
+      state[flag] = true;
+      const before = JSON.stringify({
+        w: state.w,
+        h: state.h,
+        snake: state.snake,
+        apples: state.apples,
+        tickMs: state.tickMs,
+        dead: state.dead,
+        won: state.won,
+      });
+      const res = applyGift(state, type);
+      assert.equal(res.ok, false, `${type} while ${flag}`);
+      assert.equal(
+        JSON.stringify({
+          w: state.w,
+          h: state.h,
+          snake: state.snake,
+          apples: state.apples,
+          tickMs: state.tickMs,
+          dead: state.dead,
+          won: state.won,
+        }),
+        before,
+        `${type} mutated board while ${flag}`,
+      );
+    }
+  }
+});
+
+test('ai takes the apple over the Hamiltonian step even when that step is unsafe', () => {
+  // 8x8. Apples sit right (2,1) and up (1,0) of the head, both one step away.
+  // Food is taken unconditionally now, so the tail-safety veto no longer
+  // applies; the tie between equidistant apples resolves to the first one.
+  // y0 . * . . . . . .
+  // y1 # @ * . . . . .
+  // y2 # # # . . . . .
+  // y3 # # # . . . . .
+  // y4 # # . . . . . .
+  const state = createState(() => 0.5);
+  state.w = 8;
+  state.h = 8;
+  state.snake = [
+    { x: 1, y: 1 },
+    { x: 1, y: 2 },
+    { x: 2, y: 2 },
+    { x: 2, y: 3 },
+    { x: 1, y: 3 },
+    { x: 1, y: 4 },
+    { x: 0, y: 4 },
+    { x: 0, y: 3 },
+    { x: 0, y: 2 },
+    { x: 0, y: 1 },
+  ];
+  state.dir = { x: 1, y: 0 };
+  state.lastMove = { x: 1, y: 0 };
+  state.apples = [
+    { id: 1, x: 2, y: 1 },
+    { id: 2, x: 1, y: 0 },
+  ];
+
+  const move = chooseMove(state, () => 0.99);
+  // Both apples are one step away; equal-length ties are randomised on purpose.
+  assert.ok(
+    (move.x === 1 && move.y === 0) || (move.x === 0 && move.y === -1),
+    JSON.stringify(move)
+  );
+});
+
+test('ai eats the apple below and keeps surviving', () => {
+  // 7x7. The apple below the head is reachable right now and, as the graph
+  // search proves, eating it keeps an escape route to the tail.
+  // y0 . . . . # # #
+  // y1 . . . . @ . #
+  // y2 . . . . * # #
+  // y3 . . . # # # #
+  // y4 . . . # # # #
+  // y5 . . . # # . .
+  // y6 . . * . * * .
+  const state = createState(() => 0.5);
+  state.w = 7;
+  state.h = 7;
+  state.snake = [
+    { x: 4, y: 1 },
+    { x: 4, y: 0 },
+    { x: 5, y: 0 },
+    { x: 6, y: 0 },
+    { x: 6, y: 1 },
+    { x: 6, y: 2 },
+    { x: 6, y: 3 },
+    { x: 6, y: 4 },
+    { x: 5, y: 4 },
+    { x: 4, y: 4 },
+    { x: 4, y: 5 },
+    { x: 3, y: 5 },
+    { x: 3, y: 4 },
+    { x: 3, y: 3 },
+    { x: 4, y: 3 },
+    { x: 5, y: 3 },
+    { x: 5, y: 2 },
+  ];
+  state.dir = { x: 1, y: 0 };
+  state.lastMove = { x: 1, y: 0 };
+  state.apples = [
+    { id: 1, x: 4, y: 2 },
+    { id: 2, x: 2, y: 6 },
+    { id: 3, x: 4, y: 6 },
+    { id: 4, x: 5, y: 6 },
+  ];
+
+  const move = chooseMove(state, () => 0.99);
+  assert.deepEqual(move, { x: 0, y: 1 });
+
+  // Safety invariant: after the eat the tail is still reachable and the snake
+  // keeps surviving, so taking the apple is not a dead end.
+  state.dir = move;
+  const res = step(state);
+  assert.equal(res.ate.id, 1);
+  assert.equal(state.dead, false);
+  assert.ok(tailReachable(state));
+  for (let i = 0; i < 400; i++) {
+    state.dir = chooseMove(state, () => 0.99);
+    step(state);
+    assert.equal(state.dead, false, `died at follow-up move ${i}`);
+  }
+});
+
+test('snake may move into the cell vacated by its tail', () => {
+  const state = createState(() => 0.5);
+  state.snake = [
+    { x: 1, y: 0 },
+    { x: 0, y: 0 },
+    { x: 0, y: 1 },
+    { x: 1, y: 1 },
+  ];
+  state.dir = { x: 0, y: 1 };
+  state.lastMove = { x: 0, y: 1 };
+  state.apples = [];
+  const res = step(state);
+  assert.equal(state.dead, false);
+  assert.equal(res.moved, true);
+  assert.deepEqual(state.snake[0], { x: 1, y: 1 });
+  assert.equal(state.snake.length, 4);
+});

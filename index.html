@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Gift Snake 3D</title>
+    <style>
+      :root {
+        --ink: #fdf1e7;
+        --text: #4b3545;
+        --muted: #937a8c;
+        --faint: #b49cae;
+        --line: rgba(120, 82, 106, 0.16);
+        --line-strong: rgba(120, 82, 106, 0.3);
+        --panel-top: #fffaf5;
+        --panel-bottom: #ffefe6;
+        --cyan: #5fc9b8;
+        --magenta: #ff8fae;
+        --lime: #8fd06a;
+        --orange: #ff9f6e;
+        --blue: #8fb4ff;
+        --violet: #b99cff;
+        --amber: #f5c25c;
+        --shadow: 0 16px 34px -18px rgba(94, 56, 80, 0.3);
+        --mono: "Nunito", "Quicksand", ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", system-ui, sans-serif;
+        --stage-h: 66%;
+        --deck-h: 34%;
+
+        /* deck scale: tied to viewport height because the deck is a height slice */
+        --pad: clamp(10px, 1cqh, 20px);
+        --gap: clamp(8px, 0.8cqh, 15px);
+        --r-panel: clamp(12px, 1.5cqh, 20px);
+        --r-tile: clamp(9px, 1cqh, 14px);
+        --t-micro: clamp(8px, 0.7cqh, 13px);
+        --t-xs: clamp(9px, 0.8cqh, 15px);
+        --t-sm: clamp(10px, 0.92cqh, 18px);
+        --t-md: clamp(12px, 1.1cqh, 22px);
+        --t-lg: clamp(14px, 1.35cqh, 27px);
+        --t-lead: clamp(30px, min(5cqh, 5.3cqw), 76px);
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: radial-gradient(ellipse at 50% 30%, #f3e2ec, #dfc8d8 70%);
+        color: var(--text);
+        font-family: var(--mono);
+        -webkit-font-smoothing: antialiased;
+        text-rendering: optimizeLegibility;
+      }
+
+      body { display: grid; place-items: center; }
+
+      /* The page is a phone-shaped preview, so a desktop browser shows the same
+         9:16 frame a viewer gets on mobile. Container units below scale to it. */
+      .frame {
+        position: relative;
+        width: min(100vw, calc(100vh * 9 / 16));
+        height: min(100vh, calc(100vw * 16 / 9));
+        width: min(100vw, calc(100dvh * 9 / 16));
+        height: min(100dvh, calc(100vw * 16 / 9));
+        overflow: hidden;
+        container-type: size;
+        background: var(--ink);
+        box-shadow: 0 30px 80px -30px rgba(74, 40, 62, 0.55);
+      }
+
+      ::selection { background: rgba(255, 143, 174, 0.3); color: #4b3545; }
+
+      /* ---------- stage: top two thirds ---------- */
+
+      .stage {
+        position: absolute; inset: 0 0 auto 0;
+        height: var(--stage-h);
+        overflow: hidden;
+        background:
+          radial-gradient(ellipse at 50% -10%, #fffaf4 0%, #f9e6ee 52%, #f3dbe8 100%);
+        border-bottom: 1px solid var(--line);
+      }
+
+      #app { position: absolute; inset: 0; }
+      #app canvas { display: block; }
+
+      .vignette {
+        position: absolute; inset: 0; pointer-events: none; z-index: 2;
+        background:
+          radial-gradient(ellipse at 50% 48%, transparent 58%, rgba(160, 108, 138, 0.1) 100%),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 18%, transparent 84%, rgba(255, 143, 174, 0.07));
+      }
+
+      #flash {
+        position: absolute; inset: 0; pointer-events: none; z-index: 7; opacity: 0;
+      }
+      #flash.on { animation: flashOut 420ms ease-out forwards; }
+      @keyframes flashOut {
+        0% { opacity: 0.95; }
+        100% { opacity: 0; }
+      }
+
+      .stage-hud {
+        position: absolute; top: clamp(12px, 1.6cqh, 32px); left: clamp(14px, 1.6cqw, 34px);
+        z-index: 4;
+        display: flex; align-items: center; gap: clamp(8px, 0.9cqw, 14px);
+        pointer-events: none;
+      }
+
+      .brand {
+        font-size: clamp(16px, 2.3cqw, 30px);
+        font-weight: 900; letter-spacing: 0.01em; color: var(--text);
+      }
+      .brand span { color: var(--magenta); text-shadow: 0 2px 0 rgba(255, 255, 255, 0.7); }
+      .live {
+        display: flex; align-items: center; gap: clamp(5px, 0.6cqw, 9px);
+        padding: clamp(4px, 0.6cqh, 8px) clamp(9px, 1cqw, 15px) clamp(3px, 0.5cqh, 7px);
+        font-size: clamp(9px, 1.05cqw, 14px); font-weight: 800; letter-spacing: 0.03em;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 99px;
+        background: #fffaf6;
+        box-shadow: 0 6px 14px -10px rgba(94, 56, 80, 0.34);
+      }
+      .live i {
+        width: clamp(5px, 0.45cqw, 8px); height: clamp(5px, 0.45cqw, 8px); border-radius: 50%;
+        background: var(--lime);
+        box-shadow: 0 0 0 3px rgba(143, 208, 106, 0.22);
+        animation: livePulse 2.6s ease-in-out infinite;
+      }
+      .theme {
+        pointer-events: auto;
+        padding: clamp(4px, 0.6cqh, 8px) clamp(9px, 1cqw, 15px) clamp(3px, 0.5cqh, 7px);
+        font: inherit; font-size: clamp(9px, 1.05cqw, 14px); font-weight: 800;
+        letter-spacing: 0.03em;
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 99px;
+        background: #fffaf6;
+        box-shadow: 0 6px 14px -10px rgba(94, 56, 80, 0.34);
+        cursor: pointer;
+        transition: border-color 160ms ease, background 160ms ease, transform 120ms ease, box-shadow 160ms ease;
+      }
+      .theme:hover {
+        border-color: var(--magenta);
+        background: #fff;
+        transform: translateY(-1px);
+        box-shadow: 0 10px 18px -12px rgba(94, 56, 80, 0.4);
+      }
+      .theme:focus-visible {
+        outline: 2px solid #cf4f82;
+        outline-offset: 2px;
+      }
+      @keyframes livePulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.35; }
+      }
+
+      /* ---------- shared panel language ---------- */
+
+      .panel {
+        position: relative;
+        border: 1px solid var(--line);
+        border-radius: var(--r-panel);
+        background: linear-gradient(180deg, var(--panel-top), var(--panel-bottom));
+        box-shadow: var(--shadow);
+        min-width: 0;
+      }
+      .panel::before {
+        content: ""; position: absolute; top: -1px; left: 16px; right: 16px; height: 2px;
+        border-radius: 2px;
+        background: linear-gradient(90deg, transparent, rgba(255, 143, 174, 0.45), rgba(95, 201, 184, 0.35), transparent);
+      }
+
+      /* ---------- deck: bottom third ---------- */
+
+      .deck {
+        position: absolute; inset: auto 0 0 0;
+        height: var(--deck-h);
+        display: grid;
+        grid-template-columns: minmax(300px, 36%) 1fr;
+        gap: var(--gap);
+        padding: var(--pad);
+        background: linear-gradient(180deg, #fdf1e7, #ffe9df);
+        border-top: 1px solid var(--line);
+      }
+
+      /* scoreboard */
+
+      .score {
+        display: flex; flex-direction: column; gap: var(--gap);
+        padding: var(--pad) calc(var(--pad) + 2px);
+        min-height: 0;
+      }
+
+      .score-head, .panel-head {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: clamp(6px, 0.8cqw, 12px);
+      }
+      .panel-title {
+        display: flex; align-items: center; gap: clamp(6px, 0.6cqw, 9px);
+        font-size: var(--t-xs); font-weight: 800; letter-spacing: 0.08em;
+        color: var(--text);
+      }
+      .panel-title::before {
+        content: ""; width: 4px; height: 1em; border-radius: 3px;
+        background: var(--cyan);
+      }
+      .panel-meta {
+        padding: clamp(2px, 0.4cqh, 5px) clamp(6px, 0.7cqw, 11px);
+        font-size: var(--t-micro); font-weight: 700; letter-spacing: 0.04em;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 99px;
+        background: rgba(255, 255, 255, 0.5);
+        white-space: nowrap;
+      }
+
+      .k {
+        display: block;
+        font-size: var(--t-xs); font-weight: 700; letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      .stat b {
+        display: block;
+        font-size: var(--t-md); font-weight: 600; letter-spacing: 0.05em;
+        font-variant-numeric: tabular-nums;
+        color: var(--text);
+      }
+
+      .stat-lead b {
+        margin-top: clamp(2px, 0.4cqh, 6px);
+        font-size: var(--t-lead);
+        line-height: 1; font-weight: 900;
+        letter-spacing: 0.01em;
+        color: var(--text);
+      }
+
+      .bar {
+        position: relative;
+        height: clamp(7px, 0.85cqh, 16px);
+        border-radius: 99px;
+        border: 1px solid rgba(120, 82, 106, 0.12);
+        background: rgba(120, 82, 106, 0.08);
+        overflow: hidden;
+      }
+      .bar i {
+        position: relative;
+        display: block; height: 100%; width: 0%;
+        background: linear-gradient(90deg, var(--cyan), var(--amber) 58%, var(--magenta));
+        box-shadow: 0 2px 6px -2px rgba(255, 143, 174, 0.45);
+        transition: width 180ms ease;
+        overflow: hidden;
+      }
+      .bar i::after {
+        content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 38%;
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+        animation: barSheen 3.8s ease-in-out infinite;
+      }
+      @keyframes barSheen {
+        0% { transform: translateX(-120%); }
+        62%, 100% { transform: translateX(320%); }
+      }
+
+      .row {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 0;
+        padding-top: var(--gap);
+        border-top: 1px solid var(--line);
+      }
+      .row .stat:last-child {
+        padding-left: clamp(10px, 1cqw, 18px);
+        border-left: 1px solid var(--line);
+      }
+      .row .stat b {
+        margin-top: clamp(2px, 0.4cqh, 6px);
+        font-size: var(--t-lg); color: var(--text);
+      }
+      .row .stat:last-child b { color: var(--text); }
+
+      .log {
+        margin-top: 0; min-height: 0; overflow: hidden;
+        display: flex; flex-direction: column; gap: clamp(4px, 0.6cqh, 10px);
+      }
+      .log-title {
+        padding: 0 1px;
+        font-size: var(--t-micro); font-weight: 700; letter-spacing: 0.08em;
+        color: var(--faint);
+      }
+      .log ul {
+        list-style: none; margin: 0; padding: 0;
+        display: flex; flex-direction: column; gap: clamp(4px, 0.6cqh, 10px);
+        overflow: hidden;
+      }
+      .log li {
+        padding: clamp(4px, 0.65cqh, 10px) clamp(8px, 0.9cqw, 14px);
+        font-size: var(--t-sm); letter-spacing: 0.01em;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: #fffdfb;
+        box-shadow: 0 4px 10px -8px rgba(94, 56, 80, 0.3);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        animation: toastIn 200ms ease-out;
+      }
+      .log li b { color: var(--magenta); font-weight: 800; }
+      #log li { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      #log li span { color: var(--text); font-weight: 800; font-variant-numeric: tabular-nums; }
+
+      /* gift table */
+
+      .gifts-wrap {
+        display: flex; flex-direction: column; gap: var(--gap);
+        padding: var(--pad) calc(var(--pad) + 2px) calc(var(--pad) + 2px);
+        min-height: 0;
+      }
+      .head-right { display: flex; align-items: center; gap: clamp(6px, 0.8cqw, 12px); }
+
+      #restart {
+        display: flex; align-items: center; gap: clamp(5px, 0.5cqw, 8px);
+        padding: clamp(4px, 0.6cqh, 9px) clamp(8px, 0.9cqw, 14px);
+        cursor: pointer;
+        font: 700 var(--t-micro)/1 var(--mono); letter-spacing: 0.03em;
+        color: var(--muted);
+        background: #fffaf6;
+        border: 1px solid var(--line);
+        border-radius: 99px;
+        transition: color 160ms ease, border-color 160ms ease, background 160ms ease, transform 120ms ease;
+      }
+      #restart:hover {
+        color: var(--text); border-color: var(--magenta); background: #fff;
+        transform: translateY(-1px);
+      }
+      #restart .key {
+        min-width: clamp(16px, 1.6cqh, 24px); height: clamp(16px, 1.6cqh, 24px); padding: 0 4px;
+        display: grid; place-items: center;
+        font-size: var(--t-micro); letter-spacing: 0;
+        color: var(--muted);
+        border: 1px solid var(--line-strong);
+        border-radius: 7px;
+        background: #fff;
+        box-shadow: 0 2px 0 rgba(94, 56, 80, 0.12);
+      }
+
+      .gifts {
+        flex: 1;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: repeat(2, minmax(0, 1fr));
+        gap: var(--gap);
+        min-height: 0;
+      }
+
+      .gift {
+        --c: var(--cyan);
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas: "ico key" "name name" "desc desc";
+        align-content: space-between;
+        gap: clamp(2px, 0.4cqh, 8px) clamp(6px, 0.8cqw, 12px);
+        padding: clamp(9px, 1.1cqh, 18px) clamp(10px, 1cqw, 18px);
+        text-align: left; cursor: pointer;
+        color: var(--text); font: inherit;
+        border: 1px solid var(--line);
+        border-radius: var(--r-tile);
+        background: linear-gradient(180deg, #fffdfb, #fff6ef);
+        transition: border-color 160ms ease, background 160ms ease, transform 140ms ease, box-shadow 160ms ease;
+        overflow: hidden;
+      }
+      .gift::before {
+        content: ""; position: absolute; left: 0; top: 14%; bottom: 14%; width: 5px;
+        border-radius: 5px; background: var(--c); opacity: 0.75;
+        transition: top 160ms ease, bottom 160ms ease, opacity 160ms ease;
+      }
+      .gift:hover {
+        border-color: var(--line-strong);
+        background: #fff;
+        transform: translateY(-2px);
+        box-shadow: 0 14px 22px -16px rgba(94, 56, 80, 0.45);
+      }
+      .gift:hover::before { top: 8%; bottom: 8%; opacity: 0.95; }
+      .gift:active {
+        transform: translateY(0) scale(0.99);
+        background: #fff7ef;
+        box-shadow: inset 0 1px 4px rgba(94, 56, 80, 0.14);
+      }
+
+      .gift-ico {
+        grid-area: ico;
+        justify-self: start; align-self: start;
+        display: grid; place-items: center;
+        min-width: 1.6em; min-height: 1.6em;
+        padding: 0 0.1em;
+        font-size: clamp(20px, 3.4cqh, 50px); line-height: 1;
+        border: 1px solid var(--line);
+        border-radius: clamp(12px, 1.4cqh, 18px);
+        background: #fff;
+        box-shadow: 0 3px 8px -6px rgba(94, 56, 80, 0.3);
+        transition: transform 140ms ease;
+      }
+      .gift:hover .gift-ico { transform: scale(1.06) rotate(-3deg); }
+
+      .gift-txt { display: contents; }
+      .gift-name {
+        grid-area: name;
+        min-width: 0;
+        font-size: var(--t-md);
+        font-weight: 700; letter-spacing: 0.04em;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      .gift-desc {
+        grid-area: desc;
+        font-size: var(--t-sm); letter-spacing: 0.02em;
+        color: var(--muted);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+
+      .gift-key {
+        grid-area: key;
+        min-width: clamp(20px, 2.2cqh, 34px); height: clamp(20px, 2.2cqh, 34px); padding: 0 4px;
+        display: grid; place-items: center;
+        font: 700 var(--t-xs)/1 var(--mono);
+        color: var(--text);
+        background: #fff;
+        border: 1px solid var(--line-strong);
+        border-radius: 9px;
+        box-shadow: 0 2px 0 rgba(94, 56, 80, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+        transition: transform 90ms ease, background 160ms ease;
+      }
+      .gift:hover .gift-key { background: #fff; }
+      .gift:active .gift-key { transform: translateY(1px); box-shadow: none; }
+
+      .g-apple { --c: var(--lime); }
+      .g-bomb { --c: var(--orange); }
+      .g-speed { --c: var(--cyan); }
+      .g-slow { --c: var(--amber); }
+
+      /* ---------- feedback ---------- */
+
+      .toasts {
+        position: absolute; left: var(--pad); bottom: var(--pad); z-index: 5;
+        display: flex; flex-direction: column; gap: clamp(6px, 0.8cqh, 12px);
+        width: min(480px, 54cqw);
+        pointer-events: none;
+      }
+      .toast {
+        position: relative;
+        padding: clamp(7px, 1cqh, 14px) clamp(12px, 1.2cqw, 18px) clamp(7px, 1cqh, 14px) clamp(15px, 1.4cqw, 20px);
+        font-size: var(--t-sm); line-height: 1.4; letter-spacing: 0.01em;
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: var(--r-tile);
+        background: linear-gradient(180deg, #fffdfb, #fff2e9);
+        box-shadow: 0 14px 28px -18px rgba(94, 56, 80, 0.42);
+        animation: toastIn 220ms ease-out;
+      }
+      .toast::before {
+        content: ""; position: absolute; left: 6px; top: 8px; bottom: 8px; width: 5px;
+        border-radius: 5px; background: var(--cyan);
+      }
+      .toast b { color: var(--text); font-weight: 800; }
+      .toast.good { border-color: rgba(143, 208, 106, 0.5); }
+      .toast.good::before { background: var(--lime); }
+      .toast.bad { border-color: rgba(255, 159, 110, 0.55); }
+      .toast.bad::before { background: var(--orange); }
+      .toast.out { animation: toastOut 260ms ease-in forwards; }
+      @keyframes toastIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+      @keyframes toastOut { to { opacity: 0; transform: translateY(-6px); } }
+
+      .banner {
+        position: absolute; left: 50%; top: 46%; z-index: 5;
+        width: max-content; max-width: min(780px, 82cqw);
+        transform: translate(-50%, -50%) scale(0.94);
+        text-align: center; opacity: 0; pointer-events: none;
+        transition: opacity 220ms ease, transform 260ms cubic-bezier(0.2, 0.9, 0.2, 1);
+      }
+      .banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+      .banner h1 {
+        margin: 0;
+        font-size: clamp(30px, 5cqw, 84px);
+        font-weight: 900; line-height: 1.04; letter-spacing: 0.01em;
+        color: var(--text);
+        text-shadow:
+          0 3px 0 rgba(255, 214, 228, 0.95),
+          0 7px 14px rgba(94, 56, 80, 0.16);
+      }
+      .banner p {
+        display: inline-block;
+        margin: clamp(8px, 1.2cqh, 16px) 0 0;
+        padding: clamp(4px, 0.7cqh, 9px) clamp(10px, 1cqw, 16px) clamp(3px, 0.6cqh, 8px);
+        font-size: var(--t-xs); font-weight: 700; letter-spacing: 0.08em;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 99px;
+        background: #fffaf6;
+        box-shadow: 0 8px 16px -14px rgba(94, 56, 80, 0.4);
+      }
+      .banner.good h1 {
+        text-shadow:
+          0 3px 0 rgba(214, 243, 198, 0.95),
+          0 7px 14px rgba(94, 56, 80, 0.16);
+      }
+      .banner.bad h1 {
+        text-shadow:
+          0 3px 0 rgba(255, 205, 214, 0.95),
+          0 7px 14px rgba(94, 56, 80, 0.16);
+      }
+
+      /* ---------- focus + scrollbars ---------- */
+
+      :focus-visible { outline: 2px solid #cf4f82; outline-offset: 2px; }
+      .gift:focus-visible, #restart:focus-visible {
+        outline-offset: 3px;
+        box-shadow: 0 0 0 4px rgba(207, 79, 130, 0.18);
+      }
+
+      /* ---------- responsive ---------- */
+
+      @container (max-width: 900px) {
+        .deck { grid-template-columns: minmax(200px, 40%) 1fr; }
+        .gift-desc { display: none; }
+        .gift { grid-template-areas: "ico key" "name name"; }
+        .log { display: none; }
+        .toasts { width: min(340px, 62cqw); }
+      }
+
+      @container (max-width: 640px) {
+        .stage { height: 62%; }
+        .deck {
+          height: 38%;
+          grid-template-columns: minmax(96px, 38%) 1fr;
+          grid-template-rows: 1fr;
+          gap: 6px; padding: 6px;
+        }
+        .score {
+          justify-content: space-between;
+          gap: 6px;
+          padding: 8px;
+        }
+        .score-head, .log, .head-right .panel-meta { display: none; }
+        .stat-lead b { font-size: clamp(20px, 4cqh, 32px); }
+        .score .row { padding-top: 6px; }
+        .gifts-wrap { padding: 6px; gap: 4px; }
+        .gifts { gap: 4px; }
+        .gift {
+          padding: 6px;
+          gap: 2px 4px;
+          grid-template-areas: "ico key" "name name";
+        }
+        .gift-ico {
+          min-width: 0; min-height: 0; padding: 0;
+          border: 0; border-radius: 0; background: none; box-shadow: none;
+          justify-self: start;
+          font-size: clamp(16px, 2.6cqh, 24px);
+        }
+        .gift-name { font-size: clamp(9px, 1.4cqh, 12px); }
+        .gift-key { min-width: 18px; height: 18px; font-size: 9px; }
+        .toasts { width: min(280px, 76cqw); left: 10px; bottom: 10px; }
+      }
+
+      /* ---------- reduced motion ---------- */
+
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.001ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.001ms !important;
+        }
+        .banner { transform: translate(-50%, -50%) scale(1); }
+        .bar i::after { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+    <div class="stage">
+      <div id="app"></div>
+      <div class="vignette"></div>
+
+      <header class="stage-hud">
+        <div class="brand">GIFT<span>SNAKE</span></div>
+        <span class="live"><i aria-hidden="true"></i>LIVE</span>
+        <button class="theme" id="theme" type="button" aria-keyshortcuts="T">THEME</button>
+      </header>
+
+      <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+      <div class="banner" id="banner" role="status" aria-live="polite">
+        <h1 id="banner-title">STREAMER WINS</h1>
+        <p id="banner-sub">full board</p>
+      </div>
+    </div>
+
+    <div id="flash"></div>
+
+    <footer class="deck">
+      <section class="panel score" aria-label="Scoreboard">
+        <div class="score-head">
+          <span class="panel-title">SCOREBOARD</span>
+          <span class="panel-meta">WIN · FULL BOARD</span>
+        </div>
+
+        <div class="stat stat-lead">
+          <span class="k">LENGTH</span>
+          <b id="hud-len">3 / 100</b>
+        </div>
+        <div class="bar" aria-hidden="true"><i id="len-fill"></i></div>
+
+        <div class="row">
+          <div class="stat"><span class="k">SPEED</span><b id="hud-speed">5.0 c/s</b></div>
+          <div class="stat"><span class="k">MAP</span><b id="hud-map">12 × 13</b></div>
+        </div>
+
+        <div class="log">
+          <div class="log-title">TOP GIFTERS</div>
+          <ul id="log" role="log" aria-live="polite"></ul>
+        </div>
+      </section>
+
+      <section class="panel gifts-wrap" aria-label="Gift table">
+        <div class="panel-head">
+          <span class="panel-title">GIFT TABLE</span>
+          <div class="head-right">
+            <span class="panel-meta">KEYS 1–4</span>
+            <button id="restart" type="button" aria-keyshortcuts="R">
+              <span>Restart</span><kbd class="key">R</kbd>
+            </button>
+          </div>
+        </div>
+
+        <div class="gifts">
+          <button class="gift g-apple" data-gift="apple" type="button" aria-keyshortcuts="1">
+            <span class="gift-ico" aria-hidden="true">🍎</span>
+            <span class="gift-txt"><span class="gift-name">Apple</span><span class="gift-desc">Drop 1 apple</span></span>
+            <kbd class="gift-key">1</kbd>
+          </button>
+          <button class="gift g-bomb" data-gift="bomb" type="button" aria-keyshortcuts="2">
+            <span class="gift-ico" aria-hidden="true">💣</span>
+            <span class="gift-txt"><span class="gift-name">Bomb</span><span class="gift-desc">Cut 2 segments</span></span>
+            <kbd class="gift-key">2</kbd>
+          </button>
+          <button class="gift g-speed" data-gift="speed" type="button" aria-keyshortcuts="3">
+            <span class="gift-ico" aria-hidden="true">⚡</span>
+            <span class="gift-txt"><span class="gift-name">Speed up</span><span class="gift-desc">Snake faster</span></span>
+            <kbd class="gift-key">3</kbd>
+          </button>
+          <button class="gift g-slow" data-gift="slow" type="button" aria-keyshortcuts="4">
+            <span class="gift-ico" aria-hidden="true">🐌</span>
+            <span class="gift-txt"><span class="gift-name">Slow down</span><span class="gift-desc">Snake slower</span></span>
+            <kbd class="gift-key">4</kbd>
+          </button>
+        </div>
+      </section>
+    </footer>
+    </div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+      }
+    </script>
+    <script type="module" src="./src/game.js"></script>
+  </body>
+</html>
