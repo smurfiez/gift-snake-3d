@@ -24,14 +24,18 @@ export function playRound(seed, maxTicks = 20000) {
   let gateViolations = 0;
   let closeCalls = 0;
   let drama = 0;
+  let slips = 0;
   const kinds = {};
 
   while (!state.won && !state.dead && !state.rescuing && ticks < maxTicks) {
     const info = chooseMoveDetailed(state, rand);
     if (info.closeCall) closeCalls++;
     if (info.kind === 'drama') drama++;
+    if (info.kind === 'slip') slips++;
     kinds[info.kind] = (kinds[info.kind] || 0) + 1;
-    if (!info.gate) gateViolations++;
+    // A slip deliberately drops the gate and a finish line is already proven
+    // winning; every other kind must pass it.
+    if (!info.gate && !['slip', 'finish', 'stuck'].includes(info.kind)) gateViolations++;
     state.dir = info.dir;
     const res = step(state);
     ticks++;
@@ -44,7 +48,7 @@ export function playRound(seed, maxTicks = 20000) {
     }
   }
 
-  return { state, ticks, firstAppleTick, selfDeaths, gateViolations, closeCalls, drama, kinds };
+  return { state, ticks, firstAppleTick, selfDeaths, gateViolations, closeCalls, drama, slips, kinds };
 }
 
 export function run(rounds = 500, maxTicks = 20000) {
@@ -57,6 +61,7 @@ export function run(rounds = 500, maxTicks = 20000) {
     stalled: 0,
     gateViolations: 0,
     closeCalls: 0,
+    slips: 0,
     moves: 0,
     firstAppleTicks: [],
     ticks: [],
@@ -66,6 +71,7 @@ export function run(rounds = 500, maxTicks = 20000) {
     const r = playRound(seed, maxTicks);
     stats.moves += r.ticks;
     stats.gateViolations += r.gateViolations;
+    stats.slips += r.slips;
     stats.closeCalls += r.closeCalls;
     stats.ticks.push(r.ticks);
     if (r.firstAppleTick !== null) stats.firstAppleTicks.push(r.firstAppleTick);

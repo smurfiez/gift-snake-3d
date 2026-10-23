@@ -28,7 +28,8 @@ Gold, silver, and bronze gifters persist across rounds. Repeated gifts from the 
 ## Rules
 
 - The board is 12 x 13 cells. Filling every cell wins the round.
-- Bombs land on the board like apples and only act when the snake eats one, cutting two segments (never below the minimum length). The AI goes for a safe route to a bomb before an apple. During a rescue the snake cannot move, so a bomb detonates on drop instead and frees it.
+- Bombs land on the board like apples and only act when the snake eats one, cutting two segments (never below the minimum length). A bomb is not a board object while it is falling, so it cannot be eaten or targeted until it lands; if it lands on the snake it flies into the mouth and detonates there. The AI goes for a safe route to a bomb before an apple. During a rescue the snake cannot move, so a bomb detonates on drop instead and frees it.
+- The AI is beatable: it occasionally misjudges a move and starts playing greedily for the rest of the round, which is how a round can be lost. Roughly one round in eight ends in a crash.
 - The AI chases apples along a real shortest path, but only over moves that keep the snake's own escape route intact: after each move the tail must still be reachable, the free space must stay connected, and the head must keep room to manoeuvre. When no direct route passes, it falls back to a Hamiltonian cycle walk, which cannot trap the snake and always fills the board. It sometimes picks a safe route that reads as a near-miss, but never one that fails the check, and it never deliberately dies.
 - A self-collision starts a 10 second rescue window. Viewers can free the snake with a bomb; otherwise the round ends.
 - After a crash the next round starts automatically after 3 seconds.
@@ -47,7 +48,7 @@ The logic tests cover movement, pathfinding, gifts, the rescue state, and board 
 node scripts/sim.mjs 500
 ```
 
-The seeded simulation plays 500 rounds of normal play with no gifts and reports win rate, wall and self deaths, rescues, mean time to the first apple, and close-call rate. Acceptance target: wins >= 80%, zero self collisions, zero wall deaths, zero rescues.
+The seeded simulation plays 500 rounds of normal play with no gifts and reports win rate, wall and self deaths, rescues, slips, mean time to the first apple, and close-call rate. Acceptance: wins between 80% and 95% (the snake is meant to lose sometimes), and no round may run forever without winning or dying.
 
 ## Notes
 

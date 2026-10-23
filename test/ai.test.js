@@ -192,6 +192,7 @@ test('unsafe drama route is rejected', () => {
   ];
   state.eaten = 1;
   state.dramaCooldown = 0;
+  state.slipChance = 0;
 
   const trap = { x: -1, y: 0 };
   assert.equal(roomGate(state, bodyAfter(state, trap)), false, 'trap route is unsafe');
@@ -208,6 +209,7 @@ test('opening does not orbit', () => {
   // ground and closes on the apple instead of looping.
   const rand = seeded(1);
   const state = createState(rand);
+  state.slipChance = 0;
   const visited = new Set([key(state.snake[0])]);
   const distance = () => {
     if (!state.apples.length) return 0;
@@ -252,11 +254,12 @@ test('first apple is eaten quickly in seeded openings', () => {
 test('every close-call move still passes the safety gate', () => {
   const rand = seeded(7);
   const state = createState(rand);
+  state.slipChance = 0;
   let closeCalls = 0;
 
   for (let i = 0; i < 300; i++) {
     const info = chooseMoveDetailed(state, rand);
-    if (info.closeCall) {
+    if (info.closeCall && info.kind !== 'slip') {
       closeCalls++;
       assert.equal(info.gate, true, `close call ${closeCalls} at tick ${i} failed the gate`);
     }

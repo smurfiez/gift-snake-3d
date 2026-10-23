@@ -7,6 +7,7 @@ import {
   applyGift,
   chooseMove,
   spawnApple,
+  spawnBombAt,
   appleAt,
   updateRescue,
 } from '../src/logic.js';
@@ -151,16 +152,20 @@ test('eating an apple adds exactly one segment', () => {
   assert.equal(state.apples.length, 0);
 });
 
-test('bomb gift drops a bomb instead of cutting the snake', () => {
+test('bomb gift picks a landing cell instead of cutting the snake', () => {
   const state = createState(() => 0.5);
   const before = state.snake.length;
   const res = applyGift(state, 'bomb');
   assert.equal(res.ok, true);
-  assert.ok(res.bomb);
-  assert.equal(state.bombs.length, 1);
+  assert.ok(res.cell);
+  // A falling bomb is not a board object yet, so it cannot be eaten or targeted.
+  assert.equal(state.bombs.length, 0);
   assert.equal(state.snake.length, before);
-  const b = state.bombs[0];
-  assert.ok(!cellKeys(state).has(`${b.x},${b.y}`));
+  assert.ok(!cellKeys(state).has(`${res.cell.x},${res.cell.y}`));
+
+  const bomb = spawnBombAt(state, res.cell);
+  assert.ok(bomb);
+  assert.equal(state.bombs.length, 1);
 });
 
 test('eating a bomb cuts two segments and never drops below the minimum', () => {
@@ -536,12 +541,15 @@ const playToEnd = (seed, maxTicks = 20000) => {
   return { state, ticks };
 };
 
-test('ai fills the board without dying on every seeded round', () => {
+test('every seeded round ends instead of stalling', () => {
+  // The AI is beatable on purpose, so a seed may end in a crash; what must never
+  // happen is a round that runs forever without winning or dying.
   for (let seed = 1; seed <= 5; seed++) {
     const { state, ticks } = playToEnd(seed);
-    assert.equal(state.rescuing, false, `seed ${seed} trapped itself`);
-    assert.equal(state.dead, false, `seed ${seed} died`);
-    assert.equal(state.won, true, `seed ${seed} stalled after ${ticks} ticks`);
-    assert.equal(state.snake.length, state.w * state.h);
+    assert.ok(
+      state.won || state.dead || state.rescuing,
+      `seed ${seed} stalled after ${ticks} ticks at length ${state.snake.length}`,
+    );
+    if (state.won) assert.equal(state.snake.length, state.w * state.h);
   }
 });

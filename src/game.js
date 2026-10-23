@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, createState, step, spawnApple, applyGift, chooseMoveDetailed, updateRescue } from './logic.js';
+import { CONFIG, createState, step, spawnApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateRescue } from './logic.js';
 
 const $ = (s) => document.querySelector(s);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -931,6 +931,64 @@ function dropBurst(kind) {
   return kind === 'bomb' ? BURST.bomb : BURST.apple;
 }
 
+// Apples become board objects when their drop lands. Bombs do the same, except
+// that a cell the snake already occupies sends the bomb to the mouth instead.
+function landDrop(kind, item) {
+  if (kind === 'bomb') landBomb(item);
+  else landItem(item, 0.01);
+}
+
+// A bomb that lands where the snake already is cannot sit on the board, so it
+// flies into the mouth and detonates there.
+function flyBombToMouth(cell) {
+  const mesh = makeBombMesh();
+  const from = new THREE.Vector3(cell.x + 0.5, 0.5, cell.y + 0.5);
+  const to = new THREE.Vector3();
+  mesh.position.copy(from);
+  scene.add(mesh);
+  let t = 0;
+
+  dropActors.push({
+    group: mesh,
+    update(dt) {
+      t += dt / 0.45;
+      const head = state.snake[0];
+      to.set(head.x + 0.5, 0.55, head.y + 0.5);
+      const p = Math.min(1, t);
+      mesh.position.lerpVectors(from, to, p);
+      mesh.position.y += Math.sin(p * Math.PI) * 1.6;
+      mesh.rotation.z += dt * 11;
+      mesh.scale.setScalar(1 - p * 0.3);
+      if (p < 1) return false;
+      eatBomb(state, { x: head.x, y: head.y });
+      burst(to, BURST.bomb, { count: 22, power: 1.5 });
+      shakeMag = Math.max(shakeMag, 0.45);
+      flash('#ff8a3d', '55');
+      refreshHud();
+      return true;
+    },
+  });
+}
+
+function landBomb(cell) {
+  if (state.dead || state.won) return;
+  if ((state.bombs || []).length >= CONFIG.maxBombs) {
+    dropA.set(cell.x + 0.5, 0.4, cell.y + 0.5);
+    burst(dropA, BURST.bomb, { count: 8, power: 0.9 });
+    toast('💣 Bomb limit reached', 'bad');
+    return;
+  }
+  const head = state.snake[0];
+  const onSnake = state.snake.some((s) => s.x === cell.x && s.y === cell.y);
+  if (onSnake) {
+    flyBombToMouth(cell);
+    return;
+  }
+  if (!spawnBombAt(state, cell)) flyBombToMouth(cell);
+  else refreshHud();
+  if (head) camPunch += 0.15;
+}
+
 function birdDrop(apples) {
   const g = makeBird();
   scene.add(g);
@@ -960,7 +1018,7 @@ function birdDrop(apples) {
       for (let i = 0; i < n; i++) {
         if (dropped[i] || u < (i + 1) / (n + 1) - 0.015) continue;
         dropped[i] = true;
-        landItem(apples[i], 0.01);
+        landDrop('apple', apples[i]);
         dropA.set(apples[i].x + 0.5, 0.5, apples[i].y + 0.5);
         burst(dropA, BURST.apple, { count: 6, power: 1.1 });
       }
@@ -1003,7 +1061,7 @@ function parachuteDrop(items, kind) {
         if (p >= 1) {
           it.landed = true;
           g.remove(it.m);
-          landItem(it.a, 0.01);
+          landDrop(kind, it.a);
           dropA.set(it.a.x + 0.5, 0.5, it.a.y + 0.5);
           burst(dropA, dropBurst(kind), { count: 8, power: 1.3 });
         } else {
@@ -1056,7 +1114,7 @@ function ufoDrop(items, kind) {
         if (p >= 1) {
           it.landed = true;
           g.remove(it.orb);
-          landItem(it.a, 0.01);
+          landDrop(kind, it.a);
           dropA.set(it.a.x + 0.5, 0.4, it.a.y + 0.5);
           burst(dropA, dropBurst(kind), { count: 7, power: 1 });
         } else {
@@ -1121,7 +1179,7 @@ function meteorDrop(items, kind) {
         if (p >= 1) {
           it.landed = true;
           g.remove(it.m);
-          landItem(it.a, 0.01);
+          landDrop(kind, it.a);
           dropA.set(it.a.x + 0.5, 0.4, it.a.y + 0.5);
           burst(dropA, dropBurst(kind), { count: 10, power: 2.2, size: 0.9 });
           if (kind !== 'bomb') burst(dropA, BURST.apple, { count: 8, power: 2.4 });
@@ -1615,16 +1673,6 @@ function syncBombs(dt) {
     mesh.rotation.z = Math.sin(clock * 1.7 + mesh.userData.seed) * 0.07;
     mesh.userData.spark.scale.setScalar(0.8 + Math.sin(clock * 22 + mesh.userData.seed) * 0.3);
 
-    // A drop actor owns the bomb until it lands; the real mesh pops in after.
-    if (b.dropAt != null) {
-      if (clock < b.dropAt) {
-        mesh.visible = false;
-        continue;
-      }
-      b.dropAt = null;
-      mesh.visible = true;
-      mesh.userData.born = clock;
-    }
     const age = clock - mesh.userData.born;
     const pop = age < 0.32 ? Math.max(0.01, easeOutBack(age / 0.32)) : 1;
     mesh.scale.setScalar(pop);
@@ -1793,8 +1841,7 @@ function sendGift(type) {
       toast(`💣 <b>@${viewer} freed the snake</b>`, 'good');
       logGift(type, viewer, ev.removed.length);
     } else {
-      ev.bomb.dropAt = Number.POSITIVE_INFINITY;
-      startDrop([ev.bomb], nextDropVariant('bomb'), 'bomb');
+      startDrop([ev.cell], nextDropVariant('bomb'), 'bomb');
       camPunch += 0.5;
       shakeMag = Math.max(shakeMag, 0.25);
       flash('#ff8a3d', '33');
@@ -2026,6 +2073,7 @@ function frame(ms) {
   updateDropActors(dt);
   syncSnake(dt);
   syncApples(dt);
+  syncBombs(dt);
   updateCamera(dt);
   updateParticles(dt);
   renderer.render(scene, camera);

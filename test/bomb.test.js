@@ -8,6 +8,7 @@ import {
   chooseMove,
   chooseMoveDetailed,
   spawnBomb,
+  spawnBombAt,
 } from '../src/logic.js';
 
 const DIRS = [
@@ -35,10 +36,34 @@ test('bombs are capped and never spawn on the snake, apples or each other', () =
 
 test('bomb gift respects the board cap', () => {
   const state = createState(() => 0.5);
-  for (let i = 0; i < CONFIG.maxBombs; i++) assert.equal(applyGift(state, 'bomb').ok, true);
-  const over = applyGift(state, 'bomb');
-  assert.equal(over.ok, false);
+  for (let i = 0; i < CONFIG.maxBombs; i++) {
+    const cell = applyGift(state, 'bomb');
+    assert.equal(cell.ok, true);
+    assert.ok(spawnBombAt(state, cell.cell));
+  }
   assert.equal(state.bombs.length, CONFIG.maxBombs);
+  assert.equal(applyGift(state, 'bomb').ok, false);
+});
+
+test('a dropped bomb is not eatable until it lands', () => {
+  const state = createState(() => 0.5);
+  const drop = applyGift(state, 'bomb');
+  assert.equal(drop.ok, true);
+  assert.equal(state.bombs.length, 0);
+  // Nothing on the board marks the falling bomb as food.
+  assert.equal(state.bombs.length, 0);
+  assert.equal(state.apples.some((a) => a.x === drop.cell.x && a.y === drop.cell.y), false);
+
+  spawnBombAt(state, drop.cell);
+  assert.equal(state.bombs.length, 1);
+  assert.equal(state.bombs[0].x, drop.cell.x);
+});
+
+test('landing on an occupied cell is refused so the caller can fly it to the mouth', () => {
+  const state = createState(() => 0.5);
+  const head = state.snake[0];
+  assert.equal(spawnBombAt(state, { x: head.x, y: head.y }), null);
+  assert.equal(state.bombs.length, 0);
 });
 
 test('ai eats a bomb before an apple at the same distance', () => {

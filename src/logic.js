@@ -20,6 +20,9 @@ export const CONFIG = Object.freeze({
   // Planner tuning. The margin is the number of free cells the head must keep
   // beyond the snake's own length before a move counts as safe.
   safeMargin: 4,
+  // Chance per move that the AI misjudges and starts playing greedily for the
+  // rest of the round. Keeps the snake beatable, so a rescue actually matters.
+  slipChance: 0.00006,
   dramaChance: 0.2,
   dramaCooldown: 6,
   dramaMaxCost: 2,
@@ -195,7 +198,9 @@ export function bombAt(state, p) {
 }
 
 // Bombs live on the board like apples and only act when the snake eats one.
-export function spawnBomb(state) {
+// A dropped bomb is not a board object yet: it only becomes one on landing, so
+// it cannot be eaten, targeted or counted while it is still falling.
+export function pickBombCell(state) {
   if (!Array.isArray(state.bombs)) state.bombs = [];
   if (state.bombs.length >= CONFIG.maxBombs) return null;
   const taken = new Set([
@@ -212,10 +217,39 @@ export function spawnBomb(state) {
   if (!free.length) return null;
 
   const rand = state.rand ?? Math.random;
-  const p = free[Math.floor(rand() * free.length)];
-  const bomb = { id: state.nextBombId++, x: p.x, y: p.y };
+  return free[Math.floor(rand() * free.length)];
+}
+
+// Turns a landed drop into a bomb on the board. Returns null when the cell was
+// taken while the bomb was falling or the board is already at the cap.
+export function spawnBombAt(state, cell) {
+  if (!Array.isArray(state.bombs)) state.bombs = [];
+  if (state.bombs.length >= CONFIG.maxBombs) return null;
+  if (cell.x < 0 || cell.y < 0 || cell.x >= state.w || cell.y >= state.h) return null;
+  const k = key(cell);
+  if (state.snake.some((s) => key(s) === k)) return null;
+  if (state.apples.some((a) => key(a) === k)) return null;
+  if (state.bombs.some((b) => key(b) === k)) return null;
+
+  const bomb = { id: state.nextBombId++, x: cell.x, y: cell.y };
   state.bombs.push(bomb);
   return bomb;
+}
+
+export function spawnBomb(state) {
+  const cell = pickBombCell(state);
+  return cell ? spawnBombAt(state, cell) : null;
+}
+
+// What eating a bomb does: drop it from the board and cut the tail. Also used
+// when a dropped bomb lands on the snake and is delivered straight to the head.
+export function eatBomb(state, bomb) {
+  if (bomb && Array.isArray(state.bombs)) {
+    const at = state.bombs.indexOf(bomb);
+    if (at >= 0) state.bombs.splice(at, 1);
+  }
+  const cut = Math.min(CONFIG.bombCut, state.snake.length - CONFIG.minLength);
+  return cut > 0 ? state.snake.splice(state.snake.length - cut, cut) : [];
 }
 
 export function step(state) {
@@ -246,11 +280,7 @@ export function step(state) {
   } else state.snake.pop();
 
   let removed = [];
-  if (bomb) {
-    state.bombs.splice(state.bombs.indexOf(bomb), 1);
-    const cut = Math.min(CONFIG.bombCut, state.snake.length - CONFIG.minLength);
-    if (cut > 0) removed = state.snake.splice(state.snake.length - cut, cut);
-  }
+  if (bomb) removed = eatBomb(state, bomb);
 
   if (state.snake.length >= state.w * state.h) state.won = true;
   return { moved: true, ate: apple, bomb, removed, died: false, won: state.won };
@@ -294,8 +324,10 @@ export function applyGift(state, type) {
         }
         return { type, ok: removed.length > 0, removed, freed: removed.length > 0 };
       }
-      const bomb = spawnBomb(state);
-      return { type, ok: !!bomb, bomb };
+      // The client animates the drop and only then calls spawnBombAt, so the
+      // bomb is not on the board (and not edible) while it is falling.
+      const cell = pickBombCell(state);
+      return { type, ok: !!cell, cell };
     }
     case 'speed': {
       const next = Math.max(CONFIG.minTick, state.tickMs - CONFIG.speedStep);
@@ -628,6 +660,27 @@ function findWinPlan(state, body, nodeCap = 60000) {
   return dfs(body, Math.min(240, free * 6 + 24));
 }
 
+// Greedy policy used after a slip: shortest route to the nearest food with no
+// safety gate, which is how a careless player dies.
+function greedySeek(state, body, rand) {
+  const moves = legalMoves(state, body);
+  if (!moves.length) return null;
+  const food = (state.bombs || []).length ? [...state.bombs, ...state.apples] : state.apples;
+  const found = shortestPathTo(state, body, food, rand);
+  if (found && found.path.length) {
+    const d = found.path[0];
+    return { dir: d, after: walk(state, body, [d]) };
+  }
+  let best = null;
+  for (const m of moves) {
+    const after = walk(state, body, [m.d]);
+    if (!after) continue;
+    const room = scan(state, after).free;
+    if (!best || room > best.room) best = { dir: m.d, after, room };
+  }
+  return best;
+}
+
 // Cycle-safe planner. Every candidate here provably keeps the body ordered
 // along the Hamiltonian cycle, so none of them can ever trap the snake and the
 // round is guaranteed to fill. Within that safe set the move is chosen by a
@@ -845,6 +898,24 @@ export function chooseMoveDetailed(state, rand = Math.random) {
     return { dir: { ...state.dir }, kind: 'stuck', closeCall: false, gate: false, routeLen: 0 };
   }
 
+  // A round can go wrong. One misjudged move makes the snake play greedily for
+  // the rest of the round, so it is beatable and the rescue window matters.
+  const slip = state.slipChance ?? CONFIG.slipChance;
+  if (!state.slipped && rand() < slip) state.slipped = true;
+  if (state.slipped) {
+    const g = greedySeek(state, body, rand);
+    if (g) {
+      if (g.after) remember(state, g.after[0]);
+      return {
+        dir: { ...g.dir },
+        kind: 'slip',
+        closeCall: g.after ? isCloseCall(state, g.after) : false,
+        gate: false,
+        routeLen: 0,
+      };
+    }
+  }
+
   // Primary: cycle-ordered moves are provably trap-free, and BFS routing
   // inside that set still chases apples directly.
   const cycle = hamiltonCycle(state.w, state.h);
@@ -940,10 +1011,10 @@ export function chooseMoveDetailed(state, rand = Math.random) {
       const freeCells = state.w * state.h - body.length;
       const plan = freeCells <= 14 ? findWinPlan(state, body) : null;
       if (plan && plan.length) {
+        // A verified winning line, not a gate-scored guess.
         const after = walk(state, body, [plan[0]]);
-        const gated = !!after && pool.some((m) => key(m.c) === key(after[0]));
+        kind = 'finish';
         chosen = { dir: plan[0], after: after || pool[0].after };
-        if (!gated) gate = 'none';
       } else {
         // Hold the most space by keeping away from the tail, then drift toward
         // the nearest apple, then avoid re-treading cells.
