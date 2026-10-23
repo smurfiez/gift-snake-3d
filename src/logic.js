@@ -14,6 +14,13 @@ export const CONFIG = Object.freeze({
   bombCut: 2,
   rescueMs: 10000,
   restartMs: 3000,
+  // Planner tuning. The margin is the number of free cells the head must keep
+  // beyond the snake's own length before a move counts as safe.
+  safeMargin: 4,
+  dramaChance: 0.2,
+  dramaCooldown: 6,
+  dramaMaxCost: 2,
+  recentMemory: 16,
 });
 
 export const DIR = Object.freeze({
@@ -140,6 +147,9 @@ export function createState(rand = Math.random) {
     rescuing: false,
     rescueMs: 0,
     nextAppleId: 1,
+    eaten: 0,
+    recent: [],
+    dramaCooldown: 0,
     rand,
   };
   spawnApple(state);
@@ -192,8 +202,10 @@ export function step(state) {
   }
 
   state.snake.unshift(next);
-  if (apple) state.apples.splice(state.apples.indexOf(apple), 1);
-  else state.snake.pop();
+  if (apple) {
+    state.apples.splice(state.apples.indexOf(apple), 1);
+    state.eaten = (state.eaten || 0) + 1;
+  } else state.snake.pop();
 
   if (state.snake.length >= state.w * state.h) state.won = true;
   return { moved: true, ate: apple, died: false, won: state.won };
@@ -295,49 +307,95 @@ function shortestPathTo(state, body, goals, rand = Math.random) {
   return null;
 }
 
-function simulateMoves(body, path, apples) {
-  const b = body.map((p) => ({ x: p.x, y: p.y }));
-  const food = apples.map((p) => ({ x: p.x, y: p.y }));
-  for (const d of path) {
-    const next = { x: b[0].x + d.x, y: b[0].y + d.y };
-    const eat = food.findIndex((a) => same(a, next));
-    b.unshift(next);
-    if (eat >= 0) food.splice(eat, 1);
-    else b.pop();
-  }
-  return b;
+// One step of the body under `d`. Returns null when the move would hit a wall
+// or its own body, using exactly the rules `step` applies.
+function advance(state, body, d, appleKeys) {
+  const next = { x: body[0].x + d.x, y: body[0].y + d.y };
+  if (!inBounds(state, next)) return null;
+  const eat = appleKeys.has(key(next));
+  const rest = eat ? body : body.slice(0, -1);
+  for (const s of rest) if (same(s, next)) return null;
+  const out = body.slice();
+  out.unshift(next);
+  if (!eat) out.pop();
+  else appleKeys.delete(key(next));
+  return out;
 }
 
-// Trips of three cells around each step of the shortest path; breaks the
-// head-chases-tail loop that makes a long snake orbit instead of filling space.
-function extendPath(state, body, shortest) {
-  const blocked = bodySet(body);
-  const out = [];
-  const second = body[1];
-  let cur = body[0];
+// Reachability sweep over one body layout. `free` counts the free cells the
+// head can still enter (the tail cell counts: it vacates), `open` says the
+// whole free space is one connected region, and `tail` says the tail is
+// reachable, i.e. the snake can always unwind itself.
+function scan(state, body) {
+  const w = state.w;
+  const h = state.h;
+  const n = w * h;
+  const blocked = new Uint8Array(n);
+  for (let i = 0; i < body.length - 1; i++) blocked[body[i].y * w + body[i].x] = 1;
+  const seen = new Uint8Array(n);
+  const queue = new Int32Array(n);
+  const start = body[0].y * w + body[0].x;
+  seen[start] = 1;
+  blocked[start] = 1;
+  queue[0] = start;
+  let head = 0;
+  let end = 1;
+  let free = 0;
 
-  for (const d of shortest) {
-    const next = { x: cur.x + d.x, y: cur.y + d.y };
-    const perps = d.x !== 0 ? [DIR.up, DIR.down] : [DIR.left, DIR.right];
-    let extended = false;
+  const visit = (q) => {
+    if (seen[q]) return;
+    seen[q] = 1;
+    if (blocked[q]) return;
+    free++;
+    queue[end++] = q;
+  };
 
-    for (const t of perps) {
-      const sideA = { x: cur.x + t.x, y: cur.y + t.y };
-      const sideB = { x: next.x + t.x, y: next.y + t.y };
-      const aOpen = inBounds(state, sideA) && !blocked.has(key(sideA)) && !appleAt(state, sideA);
-      const bOpen =
-        (inBounds(state, sideB) && !blocked.has(key(sideB))) ||
-        (second && same(sideB, second));
-      if (aOpen && bOpen) {
-        out.push(t, d, { x: -t.x, y: -t.y });
-        extended = true;
-        break;
-      }
-    }
-    if (!extended) out.push(d);
-    cur = next;
+  while (head < end) {
+    const p = queue[head++];
+    const x = p % w;
+    const y = (p - x) / w;
+    if (x > 0) visit(p - 1);
+    if (x < w - 1) visit(p + 1);
+    if (y > 0) visit(p - w);
+    if (y < h - 1) visit(p + w);
   }
-  return out;
+
+  const tailCell = body[body.length - 1];
+  const total = n - body.length + 1;
+  return {
+    free,
+    total,
+    open: free >= total,
+    tail: seen[tailCell.y * w + tailCell.x] === 1,
+  };
+}
+
+// The safety gate: the tail must stay reachable and the head must keep real
+// room to move, so an accepted move can never close the snake in. Connectivity
+// (`open`) is deliberately not required here: one tiny pocket early in a round
+// would otherwise veto every apple route for the rest of it.
+function isSafe(state, after, margin) {
+  const r = scan(state, after);
+  return r.tail && r.free >= after.length + margin;
+}
+
+// Weakest form of the gate: the tail stays reachable and no free cell is cut
+// off. Still excludes every move that starts a pocket the snake cannot unwind
+// from, which is what leaves holes the round can never fill.
+function keepsTail(state, after) {
+  return scan(state, after).tail;
+}
+
+// State after walking `path`, or null when any step is illegal. Does not check
+// the safety gate; callers do that on the returned body.
+function walk(state, body, path) {
+  const appleKeys = new Set(state.apples.map(key));
+  let cur = body;
+  for (const d of path) {
+    cur = advance(state, cur, d, appleKeys);
+    if (!cur) return null;
+  }
+  return cur;
 }
 
 function manhattan(a, b) {
@@ -348,13 +406,6 @@ function nearestAppleDistance(p, apples) {
   let best = Infinity;
   for (const a of apples) best = Math.min(best, manhattan(p, a));
   return best;
-}
-
-// A move is safe when the head can still reach its own tail afterwards, i.e.
-// it does not walk into a pocket that closes behind it.
-function tailReachableAfter(state, body, d) {
-  const after = simulateMoves(body, [d], state.apples);
-  return !!shortestPathTo(state, after, [after[after.length - 1]]);
 }
 
 // Every ordered move from the current head. The ordered set is closed under
@@ -386,10 +437,8 @@ function cycleDistanceToFood(cycle, fromIdx, apples) {
   return best;
 }
 
-// Hamiltonian agent. Follow the cycle, but jump ahead to any cell whose jump
-// keeps the body ordered: that is what puts apples in reach without ever
-// closing the snake on itself. When the safest jump and the cycle step tie,
-// the short step wins, so the snake slides back onto the cycle as it grows.
+// Emergency net: follow the cycle whenever the body is still ordered along it.
+// Only used when no BFS-safe move exists, never as the normal planner.
 function cycleSeek(state, cycle, body, rand) {
   if (!cycleOrdered(cycle, body)) return null;
   const moves = orderedMoves(state, cycle, body);
@@ -397,63 +446,517 @@ function cycleSeek(state, cycle, body, rand) {
 
   for (const m of moves) m.food = cycleDistanceToFood(cycle, m.idx, state.apples);
   moves.sort((a, b) => a.food - b.food || a.delta - b.delta);
-
-  // Equal-scoring jumps are rare, so occasionally take the runner-up to keep
-  // the movement line from replaying itself every round.
   if (moves.length > 1 && rand() < 0.05) {
     return { ...moves[1 + ((rand() * (moves.length - 1)) | 0)].dir };
   }
   return { ...moves[0].dir };
 }
 
-// Fallback for boards or bodies the cycle cannot vouch for (odd-by-odd sizes,
-// hand-made test positions). Food first, but only along routes that leave the
-// tail reachable; when nothing is safe it still eats rather than stall.
-function greedySeek(state, body, rand) {
+function legalMoves(state, body) {
+  const head = body[0];
+  const appleKeys = new Set(state.apples.map(key));
+  const out = [];
+  for (const d of DIRS) {
+    const c = { x: head.x + d.x, y: head.y + d.y };
+    if (!inBounds(state, c)) continue;
+    const eat = appleKeys.has(key(c));
+    const rest = eat ? body : body.slice(0, -1);
+    if (rest.some((s) => same(s, c))) continue;
+    out.push({ d, c });
+  }
+  return out;
+}
+
+// How much a route looks dangerous to a viewer: it skims the body, hugs a
+// wall, or squeezes through a one-cell corridor. Only presentation: the safety
+// gate has already accepted the route before this is scored.
+function dangerScore(state, body, path) {
+  const w = state.w;
+  const h = state.h;
   const blocked = bodySet(body);
-  const foodPaths = state.apples
-    .map((a) => shortestPathTo(state, body, [a], rand))
-    .filter((p) => p && p.path.length)
-    .sort((a, b) => a.path.length - b.path.length);
-  if (foodPaths.length) {
-    const best = foodPaths[0].path.length;
-    const tied = foodPaths.filter((p) => p.path.length === best);
-    const open = tied.filter((p) => tailReachableAfter(state, body, p.path[0]));
-    const pool = open.length ? open : tied;
-    return { ...pool[(rand() * pool.length) | 0].path[0] };
+  const appleKeys = new Set(state.apples.map(key));
+  let cur = body;
+  let score = 0;
+
+  for (const d of path) {
+    const next = advance(state, cur, d, appleKeys);
+    if (!next) break;
+    const p = next[0];
+    if (p.x === 0 || p.y === 0 || p.x === w - 1 || p.y === h - 1) score += 1;
+    let bodyNeighbours = 0;
+    let freeNeighbours = 0;
+    for (const dd of DIRS) {
+      const c = { x: p.x + dd.x, y: p.y + dd.y };
+      if (!inBounds(state, c)) continue;
+      if (blocked.has(key(c))) bodyNeighbours++;
+      else freeNeighbours++;
+    }
+    if (bodyNeighbours > 0) score += 2;
+    if (freeNeighbours <= 1) score += 2;
+    cur = next;
+    if (appleKeys.has(key(p))) appleKeys.delete(key(p));
+    if (path.length > 6) break;
+  }
+  return score;
+}
+
+// A chosen move is a close call when the head ends with a single free exit: a
+// tight corridor that reads as a near miss on screen. Presentation only; the
+// move has already passed the safety gate.
+function isCloseCall(state, after) {
+  const head = after[0];
+  const blocked = new Set();
+  for (let i = 1; i < after.length - 1; i++) blocked.add(key(after[i]));
+  let freeNeighbours = 0;
+  for (const d of DIRS) {
+    const c = { x: head.x + d.x, y: head.y + d.y };
+    if (!inBounds(state, c)) continue;
+    if (!blocked.has(key(c))) freeNeighbours++;
+  }
+  return freeNeighbours <= 1;
+}
+
+function recentPenalty(state, cell) {
+  const recent = state.recent;
+  if (!recent || !recent.length) return 0;
+  const k = key(cell);
+  const at = recent.lastIndexOf(k);
+  if (at < 0) return 0;
+  return recent.length - at;
+}
+
+function remember(state, cell) {
+  if (!Array.isArray(state.recent)) state.recent = [];
+  state.recent.push(key(cell));
+  while (state.recent.length > CONFIG.recentMemory) state.recent.shift();
+  if (typeof state.dramaCooldown === 'number' && state.dramaCooldown > 0) state.dramaCooldown--;
+  else state.dramaCooldown = 0;
+}
+
+function pickRoute(routes, rand) {
+  // Shortest route wins; ties are broken by danger so the line stays readable
+  // without spending extra route length.
+  routes.sort((a, b) => a.len - b.len || b.danger - a.danger);
+  const best = routes[0];
+  const tied = routes.filter((r) => r.len === best.len);
+  return tied[(rand() * tied.length) | 0] || best;
+}
+
+// Endgame: with only a handful of free cells left, every remaining cell has to
+// be eaten in exactly one order, and the body often has to slide for dozens of
+// moves before a hole comes within reach. A bounded depth-first search returns
+// a full winning line, or null when the budget runs out. Only a line that
+// actually fills the board is accepted, so this can never steer into a trap.
+function findWinPlan(state, body, nodeCap = 60000) {
+  const n = state.w * state.h;
+  const free = n - body.length;
+  if (free <= 0) return null;
+  let nodes = 0;
+
+  const dfs = (cur, depth) => {
+    if (cur.length >= n) return [];
+    if (depth <= 0 || ++nodes > nodeCap) return null;
+    const appleKeys = new Set(state.apples.map(key));
+    // Eating first, then moves that shrink the free space: keeps the search on
+    // the winning line instead of sliding in circles.
+    const options = [];
+    for (const d of DIRS) {
+      const next = advance(state, cur, d, new Set(appleKeys));
+      if (!next) continue;
+      options.push({ d, next, eats: next.length > cur.length });
+    }
+    options.sort((a, b) => b.eats - a.eats);
+    for (const o of options) {
+      const rest = dfs(o.next, depth - 1);
+      if (rest) return [o.d, ...rest];
+    }
+    return null;
+  };
+
+  return dfs(body, Math.min(240, free * 6 + 24));
+}
+
+// Cycle-safe planner. Every candidate here provably keeps the body ordered
+// along the Hamiltonian cycle, so none of them can ever trap the snake and the
+// round is guaranteed to fill. Within that safe set the move is chosen by a
+// real BFS route to an apple, which is what makes the snake chase directly
+// instead of walking the cycle.
+function orderedPlanner(state, cycle, body, rand) {
+  const moves = orderedMoves(state, cycle, body);
+  if (!moves.length) return null;
+  const opening = (state.eaten || 0) === 0;
+
+  // Escape hatch. A direct route can be startable only by a move the ordered
+  // set forbids, and the head then loops without eating. Plain cycle steps
+  // always progress, so walk them until an apple is taken.
+  if ((state.cycleMode || 0) > 0) {
+    state.cycleMode--;
+    moves.sort((a, b) => a.delta - b.delta);
+    const step = moves[0];
+    const after = walk(state, body, [step.dir]);
+    if (!after) return null;
+    remember(state, after[0]);
+    return {
+      dir: { ...step.dir },
+      kind: 'space',
+      closeCall: isCloseCall(state, after),
+      gate: true,
+      routeLen: 0,
+    };
   }
 
-  const options = neighborList(state, blocked, body[0]);
-  if (!options.length) return { ...state.dir };
-  const safe = options.filter((o) => tailReachableAfter(state, body, o.d));
+  // Commit to one apple until it is eaten or out of reach. Without this the
+  // snake swaps targets every tick and orbits between two equally near apples.
+  const target =
+    state.target && state.apples.some((a) => same(a, state.target)) ? state.target : null;
+  const goals = target ? [state.target] : state.apples;
 
-  const tailPath = shortestPathTo(state, body, [body[body.length - 1]]);
-  if (tailPath && tailPath.path.length) {
-    const longer = extendPath(state, body, tailPath.path);
-    if (longer.length && safe.some((o) => same(o.d, longer[0]))) return { ...longer[0] };
+  const routes = [];
+  for (const m of moves) {
+    const after = walk(state, body, [m.dir]);
+    const found = after ? shortestPathTo(state, after, goals, rand) : null;
+    const path = found ? [m.dir, ...found.path] : [m.dir];
+    routes.push({
+      dir: m.dir,
+      delta: m.delta,
+      path,
+      len: found ? 1 + found.path.length : Infinity,
+      danger: found ? dangerScore(state, body, path) : 0,
+      target: found ? found.target : null,
+      after,
+    });
   }
 
-  const picks = safe.length ? safe : options;
-  if (state.apples.length) {
-    picks.sort(
-      (a, b) =>
-        nearestAppleDistance(b.c, state.apples) - nearestAppleDistance(a.c, state.apples)
+  const reachable = routes.filter((r) => Number.isFinite(r.len));
+  if (!reachable.length && target) {
+    state.target = null;
+    return orderedPlanner(state, cycle, body, rand);
+  }
+
+  // The committed apple can be reachable only by a route the ordered move set
+  // cannot start, which shows up as a route length that never shrinks while the
+  // head loops. After a few of those, drop the route and walk the cycle, which
+  // visits every cell and therefore reaches the apple anyway.
+  if (reachable.length) {
+    const shortest = reachable.reduce((a, b) => Math.min(a, b.len), Infinity);
+    if (state.bestLen == null || shortest < state.bestLen) {
+      // Real progress. A see-saw that returns to the same length is not.
+      state.bestLen = shortest;
+      state.stuck = 0;
+    } else {
+      state.stuck = (state.stuck || 0) + 1;
+    }
+    if (state.stuck > 8) {
+      state.stuck = 0;
+      state.bestLen = null;
+      state.target = null;
+      state.cycleMode = 220;
+    }
+  }
+  let chosen = null;
+  let kind = 'apple';
+
+  if (reachable.length) {
+    reachable.sort((a, b) => a.len - b.len || a.delta - b.delta);
+    const best = reachable[0];
+    const drama = reachable.filter(
+      (r) => r.danger > best.danger && r.len <= best.len + CONFIG.dramaMaxCost && r.danger > 0
     );
+    const canDrama =
+      drama.length > 0 &&
+      rand() < CONFIG.dramaChance &&
+      (state.dramaCooldown || 0) <= 0 &&
+      !opening;
+    if (canDrama) {
+      chosen = drama[(rand() * drama.length) | 0];
+      kind = 'drama';
+      state.dramaCooldown = CONFIG.dramaCooldown;
+    } else {
+      chosen = best;
+    }
+    state.target = chosen.target || null;
+    if (!state.target) state.bestLen = null;
+  } else {
+    // No apple is reachable by a direct BFS route, which is normal once the
+    // body itself walls off the board. Fall back to cycle discipline: move to
+    // the ordered cell that sits closest to an apple along the cycle, which is
+    // what keeps the snake filling the board instead of circling.
+    kind = 'space';
+    const fresh = moves.filter((m) => thingFresh(state, m.dir, body));
+    const pool = fresh.length ? fresh : moves;
+    for (const m of pool) m.food = cycleDistanceToFood(cycle, m.idx, state.apples);
+    pool.sort((a, b) => a.food - b.food || a.delta - b.delta);
+    const pick = pool[0];
+    chosen = {
+      dir: pick.dir,
+      delta: pick.delta,
+      path: [pick.dir],
+      len: 0,
+      danger: 0,
+      after: walk(state, body, [pick.dir]),
+      head: { x: body[0].x + pick.dir.x, y: body[0].y + pick.dir.y },
+    };
   }
-  return { ...picks[0].d };
+
+  if (!chosen || !chosen.after) return null;
+  const closeCall = isCloseCall(state, chosen.after);
+  remember(state, chosen.after[0]);
+  return {
+    dir: { ...chosen.dir },
+    kind,
+    closeCall,
+    gate: true,
+    routeLen: Number.isFinite(chosen.len) ? chosen.len : 0,
+  };
+}
+
+// A move that does not revisit a cell the head just left; keeps the snake from
+// replaying the same two-cell oscillation when nothing is reachable.
+function thingFresh(state, dir, body) {
+  const cell = { x: body[0].x + dir.x, y: body[0].y + dir.y };
+  return recentPenalty(state, cell) === 0;
+}
+
+// The planner. Order of business:
+//   1. keep only moves that pass the safety gate,
+//   2. BFS an apple route and keep it when its end state still passes,
+//   3. otherwise take the safe move with the most room and least recent use,
+//   4. only when nothing passes the gate, fall back to the cycle or any move.
+// Graph distance from a cell to the tail, ignoring the rest of the body. Used
+// to stay as far from the tail as possible when no apple is safely reachable:
+// that is what keeps the snake filling space instead of curling into a knot.
+function tailDistance(state, body, from, tail) {
+  const blocked = bodySet(body);
+  const start = key(from);
+  const goal = key(tail);
+  const seen = new Set([start]);
+  let frontier = [from];
+  let dist = 0;
+  while (frontier.length) {
+    const next = [];
+    for (const p of frontier) {
+      if (key(p) === goal) return dist;
+      for (const d of DIRS) {
+        const c = { x: p.x + d.x, y: p.y + d.y };
+        if (!inBounds(state, c)) continue;
+        const k = key(c);
+        if (seen.has(k)) continue;
+        if (blocked.has(k) && k !== goal) continue;
+        seen.add(k);
+        next.push(c);
+      }
+    }
+    frontier = next;
+    dist++;
+  }
+  return Infinity;
+}
+
+// True when `body` still has at least one move the gate would accept. One ply
+// of lookahead is what stops the snake stepping into a state that is already
+// lost, which a single-state check cannot see.
+function hasSafeContinuation(state, body, margin) {
+  for (const m of legalMoves(state, body)) {
+    const after = walk(state, body, [m.d]);
+    if (after && isSafe(state, after, margin)) return true;
+  }
+  return false;
+}
+
+// The planner. Order of business:
+//   1. keep only moves that pass the safety gate, and when only one survives,
+//      check that it still has a safe continuation,
+//   2. BFS an apple route and keep it when its end state still passes,
+//   3. otherwise keep as far from the tail as possible while staying safe,
+//   4. only when nothing passes the gate, fall back to the cycle or the tail.
+export function chooseMoveDetailed(state, rand = Math.random) {
+  const body = state.snake;
+  if (state.dead || state.won || state.rescuing || !body.length) {
+    return { dir: { ...state.dir }, kind: 'idle', closeCall: false, gate: true, routeLen: 0 };
+  }
+
+  const moves = legalMoves(state, body);
+  if (!moves.length) {
+    return { dir: { ...state.dir }, kind: 'stuck', closeCall: false, gate: false, routeLen: 0 };
+  }
+
+  // Primary: cycle-ordered moves are provably trap-free, and BFS routing
+  // inside that set still chases apples directly.
+  const cycle = hamiltonCycle(state.w, state.h);
+  if (cycle && cycleOrdered(cycle, body)) {
+    const planned = orderedPlanner(state, cycle, body, rand);
+    if (planned) return planned;
+  }
+
+  const margin = CONFIG.safeMargin;
+  const scored = moves.map((m) => {
+    const after = walk(state, body, [m.d]);
+    return { ...m, after, room: after ? scan(state, after).free : -1 };
+  });
+
+  // Two acceptance levels. The full gate keeps a real margin of free cells, and
+  // it is what the planner uses while the board has room for it; once the snake
+  // is long enough that `length + margin` free cells cannot exist in the region
+  // it occupies, the tail rule alone still proves the move is not a dead end.
+  let gate = 'full';
+  let pool = scored.filter(
+    (m) => m.after && isSafe(state, m.after, margin) && scan(state, m.after).open
+  );
+  if (!pool.length) {
+    gate = 'room';
+    pool = scored.filter((m) => m.after && isSafe(state, m.after, 0));
+  }
+  if (!pool.length) {
+    gate = 'tail';
+    pool = scored.filter((m) => m.after && keepsTail(state, m.after));
+  }
+  const routeGate = (after) =>
+    gate === 'full'
+      ? isSafe(state, after, margin) && scan(state, after).open
+      : gate === 'room'
+        ? isSafe(state, after, 0)
+        : keepsTail(state, after);
+  const opening = (state.eaten || 0) === 0;
+
+  if (pool.length === 1 && gate === 'full') {
+    const deeper = pool.filter((m) => hasSafeContinuation(state, m.after, margin));
+    if (deeper.length) pool = deeper;
+  }
+
+  const tail = body[body.length - 1];
+
+  if (pool.length) {
+    // One route per gate-passing first step: from the post-step head, BFS to
+    // the nearest apple. Searching per first step (instead of one path per
+    // apple) is what keeps a safe apple reachable when the single shortest
+    // path happens to start with a move the gate rejects.
+    const routes = [];
+    for (const m of pool) {
+      const found = shortestPathTo(state, m.after, state.apples, rand);
+      // An apple on the very next cell gives an empty tail path, which is a
+      // one-step route, not a miss.
+      if (!found) continue;
+      const path = [m.d, ...found.path];
+      const after = walk(state, body, path);
+      if (!after) continue;
+      if (!routeGate(after)) continue;
+      routes.push({
+        dir: m.d,
+        path,
+        len: path.length,
+        danger: dangerScore(state, body, path),
+        after,
+      });
+    }
+
+    let chosen = null;
+    let kind = 'apple';
+    if (routes.length) {
+      const best = routes.reduce((a, b) => (b.len < a.len ? b : a));
+      const drama = routes.filter(
+        (r) => r.danger > best.danger && r.len <= best.len + CONFIG.dramaMaxCost && r.danger > 0
+      );
+      const canDrama =
+        drama.length > 0 &&
+        rand() < CONFIG.dramaChance &&
+        (state.dramaCooldown || 0) <= 0 &&
+        !opening;
+      if (canDrama) {
+        chosen = drama[(rand() * drama.length) | 0];
+        kind = 'drama';
+        state.dramaCooldown = CONFIG.dramaCooldown;
+      } else {
+        chosen = pickRoute(routes, rand);
+      }
+    } else {
+      // No safe apple route. Late in the round the last free cells are usually
+      // holes in the body and only a real search can order them.
+      const freeCells = state.w * state.h - body.length;
+      const plan = freeCells <= 14 ? findWinPlan(state, body) : null;
+      if (plan && plan.length) {
+        const after = walk(state, body, [plan[0]]);
+        const gated = !!after && pool.some((m) => key(m.c) === key(after[0]));
+        chosen = { dir: plan[0], after: after || pool[0].after };
+        if (!gated) gate = 'none';
+      } else {
+        // Hold the most space by keeping away from the tail, then drift toward
+        // the nearest apple, then avoid re-treading cells.
+        kind = 'space';
+        for (const m of pool) m.far = opening ? 0 : tailDistance(state, body, m.c, tail);
+        pool.sort(
+          (a, b) =>
+            b.room - a.room ||
+            b.far - a.far ||
+            nearestAppleDistance(a.c, state.apples) -
+              nearestAppleDistance(b.c, state.apples) ||
+            recentPenalty(state, a.c) - recentPenalty(state, b.c) ||
+            rand() - 0.5
+        );
+        chosen = { dir: pool[0].d, after: pool[0].after };
+      }
+    }
+
+    if (!chosen) {
+      kind = 'space';
+      chosen = { dir: pool[0].d, after: pool[0].after };
+    }
+
+    const closeCall = chosen.after ? isCloseCall(state, chosen.after) : false;
+    remember(state, chosen.after ? chosen.after[0] : pool[0].c);
+    return {
+      dir: { ...chosen.dir },
+      kind,
+      closeCall,
+      gate: gate !== 'none',
+      routeLen: chosen.path ? chosen.path.length : 0,
+    };
+  }
+
+  // Nothing passes the safety gate. Survivors below, in order: the cycle net,
+  // the tail, then the move that keeps the most room. Never taken while the
+  // round is opening, so the first apple still reads as a direct chase.
+  if (!opening) {
+    const cycle = hamiltonCycle(state.w, state.h);
+    if (cycle) {
+      const move = cycleSeek(state, cycle, body, rand);
+      if (move) {
+        const after = walk(state, body, [move]);
+        remember(state, after ? after[0] : body[0]);
+        return { dir: move, kind: 'cycle', closeCall: false, gate: false, routeLen: 0 };
+      }
+    }
+
+    const toTail = shortestPathTo(state, body, [tail], rand);
+    if (toTail && toTail.path.length) {
+      const after = walk(state, body, [toTail.path[0]]);
+      if (after) {
+        remember(state, after[0]);
+        return {
+          dir: { ...toTail.path[0] },
+          kind: 'tail',
+          closeCall: isCloseCall(state, after),
+          gate: false,
+          routeLen: toTail.path.length,
+        };
+      }
+    }
+  }
+
+  const options = scored.filter((m) => m.after);
+  if (!options.length) {
+    return { dir: { ...state.dir }, kind: 'stuck', closeCall: false, gate: false, routeLen: 0 };
+  }
+  options.sort((a, b) => b.room - a.room || rand() - 0.5);
+  remember(state, options[0].after[0]);
+  return {
+    dir: { ...options[0].d },
+    kind: 'desperate',
+    closeCall: isCloseCall(state, options[0].after),
+    gate: false,
+    routeLen: 0,
+  };
 }
 
 export function chooseMove(state, rand = Math.random) {
-  if (state.dead || state.won || state.rescuing) return { ...state.dir };
-
-  const body = state.snake;
-  if (!body.length) return { ...state.dir };
-
-  const cycle = hamiltonCycle(state.w, state.h);
-  if (cycle) {
-    const move = cycleSeek(state, cycle, body, rand);
-    if (move) return move;
-  }
-  return greedySeek(state, body, rand);
+  return chooseMoveDetailed(state, rand).dir;
 }
-

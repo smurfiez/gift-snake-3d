@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, createState, step, spawnApple, applyGift, chooseMove, updateRescue } from './logic.js';
+import { CONFIG, createState, step, spawnApple, applyGift, chooseMoveDetailed, updateRescue } from './logic.js';
 
 const $ = (s) => document.querySelector(s);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -1358,6 +1358,7 @@ const camDesired = new THREE.Vector3();
 let camDist = 0;
 let camPunch = 0;
 let fovKick = 0;
+let nearMissAt = -9;
 
 // Top-down framing: fit the whole board inside the stage on the tight axis.
 // +1.5 cells margin absorbs wall height and the transient speed FOV punch.
@@ -1618,8 +1619,8 @@ function logGift(type, viewer, units = 1) {
   renderLeaderboard();
 }
 
-function flash(color) {
-  hud.flash.style.background = `radial-gradient(circle at 50% 45%, ${color}66, transparent 66%)`;
+function flash(color, alpha = '66') {
+  hud.flash.style.background = `radial-gradient(circle at 50% 45%, ${color}${alpha}, transparent 66%)`;
   hud.flash.classList.remove('on');
   void hud.flash.offsetWidth;
   hud.flash.classList.add('on');
@@ -1856,7 +1857,15 @@ function frame(ms) {
     while (acc >= state.tickMs && guard++ < 8) {
       acc -= state.tickMs;
 
-      state.dir = chooseMove(state);
+      const info = chooseMoveDetailed(state);
+      state.dir = info.dir;
+      // Near-miss is presentation only: a small punch and a dim flash, rate-limited
+      // so a tight corridor does not strobe.
+      if (info.closeCall && clock - nearMissAt > 2.5) {
+        nearMissAt = clock;
+        camPunch += 0.5;
+        flash('#ffc14d', '22');
+      }
 
       const res = step(state);
       if (res.moved) pushTrail();
