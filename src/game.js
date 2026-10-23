@@ -790,7 +790,6 @@ const sparkGeo = new THREE.SphereGeometry(0.085, 10, 8);
 const sparkMat = new THREE.MeshBasicMaterial({
   color: 0xffc14d, blending: THREE.AdditiveBlending, depthWrite: false,
 });
-const BOMB_FALL = 0.5;
 
 function makeBombMesh() {
   const group = new THREE.Group();
@@ -813,7 +812,6 @@ function makeBombMesh() {
 const dropActors = [];
 const appleBatches = new Map();
 const APPLE_BATCH_MS = 450;
-const DROP_VARIANTS = ['bird', 'parachute', 'ufo', 'meteor'];
 let lastViewer = null;
 let lastVariant = '';
 
@@ -903,8 +901,8 @@ function makeUfo() {
   return g;
 }
 
-function landApple(a, delay = 0) {
-  a.dropAt = clock + delay;
+function landItem(item, delay = 0) {
+  item.dropAt = clock + delay;
 }
 
 function updateDropActors(dt) {
@@ -919,6 +917,19 @@ function updateDropActors(dt) {
 
 const dropA = new THREE.Vector3();
 const dropB = new THREE.Vector3();
+
+// The body that falls inside a drop actor: a glowing orb for fruit, the real
+// bomb (body, fuse, spark) for bombs.
+function makeDropBody(kind) {
+  if (kind !== 'bomb') return new THREE.Mesh(meteorGeo, ufoDomeMat);
+  const bomb = makeBombMesh();
+  bomb.scale.setScalar(0.85);
+  return bomb;
+}
+
+function dropBurst(kind) {
+  return kind === 'bomb' ? BURST.bomb : BURST.apple;
+}
 
 function birdDrop(apples) {
   const g = makeBird();
@@ -949,7 +960,7 @@ function birdDrop(apples) {
       for (let i = 0; i < n; i++) {
         if (dropped[i] || u < (i + 1) / (n + 1) - 0.015) continue;
         dropped[i] = true;
-        landApple(apples[i], 0.01);
+        landItem(apples[i], 0.01);
         dropA.set(apples[i].x + 0.5, 0.5, apples[i].y + 0.5);
         burst(dropA, BURST.apple, { count: 6, power: 1.1 });
       }
@@ -959,11 +970,16 @@ function birdDrop(apples) {
   };
 }
 
-function parachuteDrop(apples) {
+function parachuteDrop(items, kind) {
   const g = new THREE.Group();
   scene.add(g);
-  const items = apples.map((a, i) => {
+  const drops = items.map((a, i) => {
     const m = makeParachute();
+    if (kind === 'bomb') {
+      const body = makeDropBody(kind);
+      body.position.set(0, 0.0, 0);
+      m.add(body);
+    }
     m.position.set(a.x + 0.5, 8.6 + i * 0.3, a.y + 0.5);
     m.userData.seed = Math.random() * TAU;
     g.add(m);
@@ -976,7 +992,7 @@ function parachuteDrop(apples) {
     update(dt) {
       elapsed += dt;
       let all = true;
-      for (const it of items) {
+      for (const it of drops) {
         if (it.landed) continue;
         it.t += dt;
         if (it.t < 0) { all = false; continue; }
@@ -987,9 +1003,9 @@ function parachuteDrop(apples) {
         if (p >= 1) {
           it.landed = true;
           g.remove(it.m);
-          landApple(it.a, 0.01);
+          landItem(it.a, 0.01);
           dropA.set(it.a.x + 0.5, 0.5, it.a.y + 0.5);
-          burst(dropA, BURST.apple, { count: 8, power: 1.3 });
+          burst(dropA, dropBurst(kind), { count: 8, power: 1.3 });
         } else {
           all = false;
         }
@@ -999,18 +1015,19 @@ function parachuteDrop(apples) {
   };
 }
 
-function ufoDrop(apples) {
+function ufoDrop(items, kind) {
   const g = makeUfo();
   scene.add(g);
-  const n = apples.length;
+  const n = items.length;
   let cx = 0;
   let cz = 0;
-  for (const a of apples) { cx += a.x + 0.5; cz += a.y + 0.5; }
+  for (const a of items) { cx += a.x + 0.5; cz += a.y + 0.5; }
   cx /= n;
   cz /= n;
   g.position.set(cx, 4.1, cz);
-  const orbs = apples.map((a, i) => {
-    const orb = new THREE.Mesh(meteorGeo, ufoDomeMat);
+  const base = kind === 'bomb' ? 0.85 : 1;
+  const orbs = items.map((a, i) => {
+    const orb = makeDropBody(kind);
     orb.position.set(a.x + 0.5, 2.4, a.y + 0.5);
     orb.visible = false;
     g.add(orb);
@@ -1035,13 +1052,13 @@ function ufoDrop(apples) {
         it.orb.position.y = 2.4 - p * 2.05;
         it.orb.position.x = it.a.x + 0.5;
         it.orb.position.z = it.a.y + 0.5;
-        it.orb.scale.setScalar(1 - p * 0.55);
+        it.orb.scale.setScalar(base * (1 - p * 0.55));
         if (p >= 1) {
           it.landed = true;
           g.remove(it.orb);
-          landApple(it.a, 0.01);
+          landItem(it.a, 0.01);
           dropA.set(it.a.x + 0.5, 0.4, it.a.y + 0.5);
-          burst(dropA, BURST.apple, { count: 7, power: 1 });
+          burst(dropA, dropBurst(kind), { count: 7, power: 1 });
         } else {
           all = false;
         }
@@ -1065,13 +1082,16 @@ function ufoDrop(apples) {
   };
 }
 
-function meteorDrop(apples) {
+function meteorDrop(items, kind) {
   const g = new THREE.Group();
   scene.add(g);
-  const items = apples.map((a, i) => {
+  const drops = items.map((a, i) => {
     const m = new THREE.Group();
-    const rock = new THREE.Mesh(meteorGeo, meteorMat);
-    m.add(rock);
+    if (kind === 'bomb') {
+      m.add(makeDropBody(kind));
+    } else {
+      m.add(new THREE.Mesh(meteorGeo, meteorMat));
+    }
     const trail = new THREE.Mesh(meteorTrailGeo, meteorTrailMat);
     trail.rotation.x = Math.PI / 2;
     trail.position.z = -0.48;
@@ -1092,7 +1112,7 @@ function meteorDrop(apples) {
     update(dt) {
       elapsed += dt;
       let all = true;
-      for (const it of items) {
+      for (const it of drops) {
         if (it.landed) continue;
         it.t += dt;
         if (it.t < 0) { all = false; continue; }
@@ -1101,10 +1121,10 @@ function meteorDrop(apples) {
         if (p >= 1) {
           it.landed = true;
           g.remove(it.m);
-          landApple(it.a, 0.01);
+          landItem(it.a, 0.01);
           dropA.set(it.a.x + 0.5, 0.4, it.a.y + 0.5);
-          burst(dropA, BURST.bomb, { count: 10, power: 2.2, size: 0.9 });
-          burst(dropA, BURST.apple, { count: 8, power: 2.4 });
+          burst(dropA, dropBurst(kind), { count: 10, power: 2.2, size: 0.9 });
+          if (kind !== 'bomb') burst(dropA, BURST.apple, { count: 8, power: 2.4 });
         } else {
           all = false;
         }
@@ -1114,20 +1134,26 @@ function meteorDrop(apples) {
   };
 }
 
-function startDrop(apples, variant) {
+// Bombs get their own variants: no bird fly-by, because a bird carrying a bomb
+// reads as an accident rather than a gift.
+const APPLE_VARIANTS = ['bird', 'parachute', 'ufo', 'meteor'];
+const BOMB_VARIANTS = ['parachute', 'ufo', 'meteor'];
+
+function startDrop(items, variant, kind = 'apple') {
   const act =
-    variant === 'parachute' ? parachuteDrop(apples) :
-    variant === 'ufo' ? ufoDrop(apples) :
-    variant === 'meteor' ? meteorDrop(apples) :
-    birdDrop(apples);
+    variant === 'parachute' ? parachuteDrop(items, kind) :
+    variant === 'ufo' ? ufoDrop(items, kind) :
+    variant === 'meteor' ? meteorDrop(items, kind) :
+    birdDrop(items);
   dropActors.push(act);
 }
 
-function nextDropVariant() {
-  let v = pick(DROP_VARIANTS);
+function nextDropVariant(kind = 'apple') {
+  const list = kind === 'bomb' ? BOMB_VARIANTS : APPLE_VARIANTS;
+  let v = pick(list);
   if (v === lastVariant) {
-    const i = (DROP_VARIANTS.indexOf(v) + 1 + ((Math.random() * (DROP_VARIANTS.length - 1)) | 0)) % DROP_VARIANTS.length;
-    v = DROP_VARIANTS[i];
+    const i = (list.indexOf(v) + 1 + ((Math.random() * (list.length - 1)) | 0)) % list.length;
+    v = list[i];
   }
   lastVariant = v;
   return v;
@@ -1586,16 +1612,17 @@ function syncBombs(dt) {
     const bob = 0.06 + Math.sin(clock * 3 + mesh.userData.seed) * 0.07;
     mesh.position.set(tmpVec.x, bob, tmpVec.z);
     mesh.rotation.y = (mesh.rotation.y + dt * 0.9) % TAU;
+    mesh.rotation.z = Math.sin(clock * 1.7 + mesh.userData.seed) * 0.07;
     mesh.userData.spark.scale.setScalar(0.8 + Math.sin(clock * 22 + mesh.userData.seed) * 0.3);
 
-    // Gift bombs fall onto the cell on their own mesh, so no drop actor is needed.
+    // A drop actor owns the bomb until it lands; the real mesh pops in after.
     if (b.dropAt != null) {
       if (clock < b.dropAt) {
-        const p = Math.min(1, 1 - (b.dropAt - clock) / BOMB_FALL);
-        mesh.position.y = bob + (1 - p) * (1 - p) * 3.2;
+        mesh.visible = false;
         continue;
       }
       b.dropAt = null;
+      mesh.visible = true;
       mesh.userData.born = clock;
     }
     const age = clock - mesh.userData.born;
@@ -1766,14 +1793,14 @@ function sendGift(type) {
       toast(`💣 <b>@${viewer} freed the snake</b>`, 'good');
       logGift(type, viewer, ev.removed.length);
     } else {
-      ev.bomb.dropAt = clock + BOMB_FALL;
-      setWorld(ev.bomb, tmpVec);
-      tmpVec.y = 0.5;
-      burst(tmpVec, BURST.bomb, { count: 10, power: 1.2 });
-      shakeMag = Math.max(shakeMag, 0.18);
+      ev.bomb.dropAt = Number.POSITIVE_INFINITY;
+      startDrop([ev.bomb], nextDropVariant('bomb'), 'bomb');
+      camPunch += 0.5;
+      shakeMag = Math.max(shakeMag, 0.25);
       flash('#ff8a3d', '33');
       toast(`💣 <b>@${viewer}</b> dropped a bomb`, 'bad');
       logGift(type, viewer);
+      refreshHud();
     }
   } else if (type === 'speed' || type === 'slow') {
     sfx.gift(type);
