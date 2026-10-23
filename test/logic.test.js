@@ -356,8 +356,9 @@ test('gifts do not mutate the board while dead or won', () => {
 
 test('ai takes the apple over the Hamiltonian step even when that step is unsafe', () => {
   // 8x8. Apples sit right (2,1) and up (1,0) of the head, both one step away.
-  // Food is taken unconditionally now, so the tail-safety veto no longer
-  // applies; the tie between equidistant apples resolves to the first one.
+  // Either jump keeps the body ordered along the cycle, so both are safe; the
+  // cycle-distance tie is broken by the move that advances least, so the test
+  // accepts either apple cell rather than pinning one down.
   // y0 . * . . . . . .
   // y1 # @ * . . . . .
   // y2 # # # . . . . .
@@ -467,4 +468,44 @@ test('snake may move into the cell vacated by its tail', () => {
   assert.equal(res.moved, true);
   assert.deepEqual(state.snake[0], { x: 1, y: 1 });
   assert.equal(state.snake.length, 4);
+});
+
+const seeded = (seed) => {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+const playToEnd = (seed, maxTicks = 20000) => {
+  const rand = seeded(seed);
+  const state = createState(rand);
+  const appleTicks = Math.round(CONFIG.appleIntervalMs / CONFIG.tickMs);
+  let ticks = 0;
+  let clock = 0;
+  while (!state.won && !state.dead && !state.rescuing && ticks < maxTicks) {
+    state.dir = chooseMove(state, rand);
+    step(state);
+    ticks++;
+    clock++;
+    if (clock >= appleTicks) {
+      clock = 0;
+      if (state.apples.length < CONFIG.maxApples) spawnApple(state);
+    }
+  }
+  return { state, ticks };
+};
+
+test('ai fills the board without dying on every seeded round', () => {
+  for (let seed = 1; seed <= 5; seed++) {
+    const { state, ticks } = playToEnd(seed);
+    assert.equal(state.rescuing, false, `seed ${seed} trapped itself`);
+    assert.equal(state.dead, false, `seed ${seed} died`);
+    assert.equal(state.won, true, `seed ${seed} stalled after ${ticks} ticks`);
+    assert.equal(state.snake.length, state.w * state.h);
+  }
 });

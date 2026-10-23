@@ -214,15 +214,13 @@ const CAM_FOV = 48;
 const camera = new THREE.PerspectiveCamera(CAM_FOV, bootSize.w / bootSize.h, 0.1, 240);
 camera.up.set(0, 0, -1);
 
-scene.add(new THREE.AmbientLight(0xfff2df, 1.1));
-const keyLight = new THREE.DirectionalLight(0xfff0e0, 1.5);
+scene.add(new THREE.AmbientLight(0xfff2df, 0.55));
+const keyLight = new THREE.DirectionalLight(0xfff0e0, 2.4);
 keyLight.position.set(9, 16, 7);
 scene.add(keyLight);
-const rimLight = new THREE.DirectionalLight(0xffb3c9, 0.6);
+const rimLight = new THREE.DirectionalLight(0xffb3c9, 0.9);
 rimLight.position.set(-10, 7, -9);
 scene.add(rimLight);
-const headLight = new THREE.PointLight(0x9be7cf, 6, 10, 2);
-scene.add(headLight);
 
 // board
 const boardGroup = new THREE.Group();
@@ -407,35 +405,70 @@ function layoutBoard() {
 
 // snake: one continuous tube swept along the eased visual path
 const RING_PER_CELL = 3.5;
+// Old tail cells kept so corner bevels can be paid back as tail lag instead
+// of shortening the visible body.
+const TRAIL_EXTRA = 8;
 const RING_RADIAL = 9;
 const R_HEAD = 0.45;
 const R_TAIL = 0.26;
-const MAX_RINGS = Math.ceil((MAX_SEG - 1) * RING_PER_CELL) + 1;
+const MAX_RINGS = Math.ceil(MAX_SEG * (RING_PER_CELL + 1)) + 4;
+
+// Three flat tones keep the snake cel-shaded instead of glossy.
+const toonRamp = new THREE.DataTexture(
+  new Uint8Array([82, 82, 82, 255, 158, 158, 158, 255, 255, 255, 255, 255]),
+  3,
+  1,
+  THREE.RGBAFormat
+);
+toonRamp.minFilter = THREE.NearestFilter;
+toonRamp.magFilter = THREE.NearestFilter;
+toonRamp.generateMipmaps = false;
+toonRamp.needsUpdate = true;
 
 const snakeMesh = new THREE.Mesh(
   new THREE.BufferGeometry(),
-  new THREE.MeshStandardMaterial({
-    roughness: 0.5,
-    metalness: 0.05,
-    emissive: 0x7d5573,
-    emissiveIntensity: 0.2,
-    vertexColors: true,
+  new THREE.MeshToonMaterial({
+    color: 0x5ecfae,
+    gradientMap: toonRamp,
   })
 );
 snakeMesh.frustumCulled = false;
 scene.add(snakeMesh);
 
-const curvePts = [];
-const snakeCurve = new THREE.CatmullRomCurve3(curvePts, false, 'centripetal');
+// Inverted hull outline: the same tube pushed out along its normals, drawn
+// back-faces only. Gives the flat toon fill a drawn edge.
+const snakeOutline = new THREE.Mesh(
+  snakeMesh.geometry,
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    vertexShader: `
+      void main() {
+        vec3 p = position + normalize(normal) * 0.055;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+      }
+    `,
+    fragmentShader: `
+      void main() { gl_FragColor = vec4(0.27, 0.15, 0.24, 1.0); }
+    `,
+  })
+);
+snakeOutline.frustumCulled = false;
+snakeMesh.add(snakeOutline);
+
 const ringPos = Array.from({ length: MAX_RINGS + 4 }, () => new THREE.Vector3());
 const ringTan = Array.from({ length: MAX_RINGS + 4 }, () => new THREE.Vector3());
 const ringNrm = Array.from({ length: MAX_RINGS + 4 }, () => new THREE.Vector3());
 const ringBin = new THREE.Vector3();
-const tubeColor = new THREE.Color();
-const snakeHeadColor = new THREE.Color(0xa8f0d8);
-const snakeTailColor = new THREE.Color(0xffc2d6);
 const TUBE_UP = new THREE.Vector3(0, 1, 0);
 const tubeAlt = new THREE.Vector3();
+
+// Two Chaikin passes round each cell corner into a short arc. The trail keeps
+// extra tail cells so the lost arc length is paid back as tail lag, not shrink.
+const SMOOTH_CAP = (MAX_SEG + TRAIL_EXTRA) * 4 + 8;
+const smoothA = Array.from({ length: SMOOTH_CAP }, () => new THREE.Vector3());
+const smoothB = Array.from({ length: SMOOTH_CAP }, () => new THREE.Vector3());
+const smoothD = new Float32Array(SMOOTH_CAP);
+const smoothTail = new THREE.Vector3();
 
 // Two cap sections per end, sampled off a hemisphere, so caps read as domes.
 const CAP_D = [0.4, 0.78];
@@ -447,9 +480,6 @@ function ringRadius(t) {
 
 // Rings first, then two pole vertices; quads between rings plus triangle-fan caps.
 function rebuildTube(n) {
-  curvePts.length = 0;
-  for (let i = 0; i < n; i++) curvePts.push(visual[i]);
-
   const body = Math.min(MAX_RINGS, Math.max(4, Math.round((n - 1) * RING_PER_CELL) + 1));
   const S = RING_RADIAL;
   const bodyStart = CAP_D.length;
@@ -457,7 +487,59 @@ function rebuildTube(n) {
   const lastBody = bodyStart + body - 1;
   const last = sections - 1;
 
-  for (let i = 0; i < body; i++) snakeCurve.getPoint(i / (body - 1), ringPos[bodyStart + i]);
+  // Build the cell path with exact corner knots, then bevel those knots.
+  // The path runs past the tail so the bevel can be paid back as tail lag;
+  // sampling stops at the logical length, so the body neither shrinks nor pulses.
+  const span = n - 1;
+  const back = 1 - visualP;
+  const rawEnd = Math.min(trail.length - 1, back + span + TRAIL_EXTRA);
+  let count = 0;
+  sampleTrail(back, smoothA[count++]);
+  for (let k = Math.floor(back) + 1; k < rawEnd; k++) sampleTrail(k, smoothA[count++]);
+  sampleTrail(rawEnd, smoothA[count++]);
+
+  const w = 0.25;
+  let src = smoothA;
+  let dst = smoothB;
+  for (let pass = 0; pass < 2; pass++) {
+    dst[0].copy(src[0]);
+    let m = 1;
+    for (let i = 0; i < count - 1; i++) {
+      dst[m++].lerpVectors(src[i], src[i + 1], w);
+      dst[m++].lerpVectors(src[i], src[i + 1], 1 - w);
+    }
+    dst[m++].copy(src[count - 1]);
+    src = dst;
+    count = m;
+    dst = pass === 0 ? smoothA : smoothB;
+  }
+
+  smoothD[0] = 0;
+  for (let i = 1; i < count; i++) {
+    smoothD[i] = smoothD[i - 1] + src[i].distanceTo(src[i - 1]);
+  }
+  let pathLen = smoothD[count - 1];
+  // Early in a round there may not be enough old tail to pay for the bevels.
+  // Extend the tail straight by the shortfall so the body still cannot shrink.
+  if (pathLen < span) {
+    smoothTail.subVectors(src[count - 1], src[count - 2]);
+    if (smoothTail.lengthSq() < 1e-8) smoothTail.set(0, 0, 1);
+    else smoothTail.normalize();
+    smoothD[count] = span;
+    src[count].copy(src[count - 1]).addScaledVector(smoothTail, span - pathLen);
+    count++;
+    pathLen = span;
+  }
+  const visible = Math.min(span, pathLen);
+
+  let j = 0;
+  for (let i = 0; i < body; i++) {
+    const d = (visible * i) / (body - 1);
+    while (j < count - 2 && smoothD[j + 1] < d) j++;
+    const seg = smoothD[j + 1] - smoothD[j] || 1;
+    const f = Math.min(1, Math.max(0, (d - smoothD[j]) / seg));
+    ringPos[bodyStart + i].lerpVectors(src[j], src[j + 1], f);
+  }
 
   for (let i = 0; i < body; i++) {
     const c = bodyStart + i;
@@ -505,19 +587,16 @@ function rebuildTube(n) {
   const headPole = sections * S;
   const tailPole = headPole + 1;
   const pos = new Float32Array((tailPole + 1) * 3);
-  const col = new Float32Array((tailPole + 1) * 3);
   const idx = new Uint16Array(S * 6 * sections);
 
   let o = 0;
   for (let i = 0; i < sections; i++) {
-    const t = i / last;
     let r;
     if (i < bodyStart) r = rHead * CAP_R[bodyStart - 1 - i];
     else if (i > lastBody) r = rTail * CAP_R[i - lastBody - 1];
     else r = ringRadius((i - bodyStart) / (body - 1));
     const nrm = ringNrm[i];
     ringBin.crossVectors(ringTan[i], nrm);
-    tubeColor.copy(snakeHeadColor).lerp(snakeTailColor, t);
     for (let s = 0; s < S; s++) {
       const ang = (s / S) * TAU;
       const ca = Math.cos(ang) * r;
@@ -525,9 +604,6 @@ function rebuildTube(n) {
       pos[o] = ringPos[i].x + nrm.x * ca + ringBin.x * sa;
       pos[o + 1] = ringPos[i].y + nrm.y * ca + ringBin.y * sa;
       pos[o + 2] = ringPos[i].z + nrm.z * ca + ringBin.z * sa;
-      col[o] = tubeColor.r;
-      col[o + 1] = tubeColor.g;
-      col[o + 2] = tubeColor.b;
       o += 3;
     }
   }
@@ -535,18 +611,10 @@ function rebuildTube(n) {
   pos[o] = ringPos[bodyStart].x - headTan.x * rHead;
   pos[o + 1] = ringPos[bodyStart].y - headTan.y * rHead;
   pos[o + 2] = ringPos[bodyStart].z - headTan.z * rHead;
-  tubeColor.copy(snakeHeadColor);
-  col[o] = tubeColor.r;
-  col[o + 1] = tubeColor.g;
-  col[o + 2] = tubeColor.b;
   o += 3;
   pos[o] = ringPos[lastBody].x + tailTan.x * rTail;
   pos[o + 1] = ringPos[lastBody].y + tailTan.y * rTail;
   pos[o + 2] = ringPos[lastBody].z + tailTan.z * rTail;
-  tubeColor.copy(snakeTailColor);
-  col[o] = tubeColor.r;
-  col[o + 1] = tubeColor.g;
-  col[o + 2] = tubeColor.b;
 
   let k = 0;
   for (let i = 0; i < last; i++) {
@@ -576,12 +644,12 @@ function rebuildTube(n) {
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
   geo.setIndex(new THREE.BufferAttribute(idx, 1));
   geo.computeVertexNormals();
 
   snakeMesh.geometry.dispose();
   snakeMesh.geometry = geo;
+  snakeOutline.geometry = geo;
 }
 
 const eyes = new THREE.Group();
@@ -620,7 +688,7 @@ const THEMES = [
     },
     scene: '#f7dfe9', base: '#6b4a63', baseEm: '#7d5573', grid: '#ffc9db',
     wall: '#ffb3c7', wallEm: '#ff7fa4', post: '#fff4ea', postEm: '#ffc7d8',
-    head: '#a8f0d8', tail: '#ffc2d6', accent: '#9be7cf', rim: '#ffb3c9',
+    head: '#5ecfae', accent: '#9be7cf', rim: '#ffb3c9',
   },
   {
     name: 'Matcha',
@@ -630,7 +698,7 @@ const THEMES = [
     },
     scene: '#eef4e4', base: '#4a5a3c', baseEm: '#5a6c48', grid: '#dcefc6',
     wall: '#b8e39a', wallEm: '#8ac96a', post: '#fbf7e6', postEm: '#d9ecc0',
-    head: '#fff0c9', tail: '#99c97e', accent: '#b8e39a', rim: '#a8d98a',
+    head: '#9ccc6e', accent: '#b8e39a', rim: '#a8d98a',
   },
   {
     name: 'Blueberry',
@@ -640,7 +708,7 @@ const THEMES = [
     },
     scene: '#e8edfa', base: '#424a6b', baseEm: '#525b80', grid: '#d6e0ff',
     wall: '#b7c5ff', wallEm: '#8ea4ff', post: '#f8f4ff', postEm: '#d9defc',
-    head: '#fff2a8', tail: '#a9b8ff', accent: '#b7c5ff', rim: '#c39cff',
+    head: '#8fa8ff', accent: '#b7c5ff', rim: '#c39cff',
   },
   {
     name: 'Mocha',
@@ -650,7 +718,7 @@ const THEMES = [
     },
     scene: '#f5e9dd', base: '#5a4034', baseEm: '#6b4c3d', grid: '#ffe1c2',
     wall: '#e3bd9a', wallEm: '#c99568', post: '#fff6ea', postEm: '#ecd3b8',
-    head: '#ffe8cf', tail: '#d99a6a', accent: '#e3bd9a', rim: '#e8a08a',
+    head: '#c99062', accent: '#e3bd9a', rim: '#e8a08a',
   },
 ];
 
@@ -675,10 +743,7 @@ function applyTheme(index) {
   postMat.color.set(th.post);
   postMat.emissive.set(th.postEm);
 
-  snakeHeadColor.set(th.head);
-  snakeTailColor.set(th.tail);
-  snakeMesh.material.emissive.set(th.baseEm);
-  headLight.color.set(th.accent);
+  snakeMesh.material.color.set(th.head);
   rimLight.color.set(th.rim);
 
   paintChecker();
@@ -1272,7 +1337,8 @@ function updateParticles(dt) {
 // ---------- state ----------
 let state = createState();
 const visual = Array.from({ length: MAX_SEG }, () => new THREE.Vector3());
-let visualCount = 0;
+const trail = [];
+let visualP = 1;
 let headYaw = 0;
 let yawReady = false;
 const appleMeshes = [];
@@ -1308,32 +1374,77 @@ function setWorld(p, out) {
   return out.set(p.x + 0.5, SNAKE_Y, p.y + 0.5);
 }
 
+function resetTrail() {
+  trail.length = 0;
+  const snake = state.snake;
+  const n = Math.min(snake.length, MAX_SEG);
+  for (let i = 0; i < n; i++) trail.push({ x: snake[i].x, y: snake[i].y });
+  if (n) {
+    const tail = trail[n - 1];
+    const prev = trail[n - 2] || tail;
+    trail.push({ x: tail.x + tail.x - prev.x, y: tail.y + tail.y - prev.y });
+  }
+  visualP = 1;
+}
+
+// Follow the head trail at a fixed one-cell spacing. Easing each body point
+// independently shortened the snake on every turn; arclength sampling cannot.
+function pushTrail() {
+  const snake = state.snake;
+  if (!snake.length) {
+    trail.length = 0;
+    return;
+  }
+  const head = snake[0];
+  if (!trail.length || trail[0].x !== head.x || trail[0].y !== head.y) {
+    trail.unshift({ x: head.x, y: head.y });
+    visualP = 0;
+  }
+  const want = Math.min(MAX_SEG + 1 + TRAIL_EXTRA, snake.length + 1 + TRAIL_EXTRA);
+  while (trail.length > want) trail.pop();
+  if (trail.length <= snake.length) resetTrail();
+}
+
+function sampleTrail(d, out) {
+  const max = trail.length - 1;
+  if (max <= 0) {
+    const c = trail[0] || state.snake[0];
+    return out.set(c.x + 0.5, SNAKE_Y, c.y + 0.5);
+  }
+  const at = Math.max(0, Math.min(max, d));
+  if (at === max) {
+    const c = trail[max];
+    return out.set(c.x + 0.5, SNAKE_Y, c.y + 0.5);
+  }
+  const i = Math.floor(at);
+  const f = at - i;
+  const a = trail[i];
+  const b = trail[i + 1];
+  return out.set(a.x + (b.x - a.x) * f + 0.5, SNAKE_Y, a.y + (b.y - a.y) * f + 0.5);
+}
+
 function syncSnake(dt) {
   const snake = state.snake;
   const n = Math.min(snake.length, MAX_SEG);
-  // A regrown segment should pop into place, not crawl from its pre-bomb cell.
-  if (n < visualCount) visualCount = n;
-  const ease = 1 - Math.exp(-dt * 16);
-  const yawEase = 1 - Math.exp(-dt * 15);
+  if (!trail.length) resetTrail();
+  else if (snake.length && (trail[0].x !== snake[0].x || trail[0].y !== snake[0].y)) pushTrail();
+  const want = Math.min(MAX_SEG + 1 + TRAIL_EXTRA, snake.length + 1 + TRAIL_EXTRA);
+  while (trail.length > want) trail.pop();
+  if (trail.length <= snake.length) resetTrail();
 
+  // Logical ticks jump one cell; visualP slides the body along the trail
+  // between them so spacing stays exactly one cell through corners.
+  if (!state.dead && !state.won && !state.rescuing) {
+    visualP = Math.min(1, visualP + (dt * 1000) / state.tickMs);
+  }
+  const back = 1 - visualP;
+  for (let i = 0; i < n; i++) sampleTrail(back + i, visual[i]);
+
+  const yawEase = 1 - Math.exp(-dt * 15);
   let cells = 0;
   for (let i = 0; i < n; i++) {
     const cell = snake[i];
     if (!cell) continue;
-    setWorld(cell, tmpVec);
-    const v = visual[i];
-    if (i >= visualCount) {
-      v.copy(tmpVec);
-      visualCount = i + 1;
-    } else {
-      const dx = tmpVec.x - v.x;
-      const dy = tmpVec.y - v.y;
-      const dz = tmpVec.z - v.z;
-      // A long jump (restart, first frame) must snap; easing across the board reads as a bug.
-      if (dx * dx + dy * dy + dz * dz > 9) v.copy(tmpVec);
-      else v.lerp(tmpVec, ease);
-    }
-
     cellDummy.position.set(cell.x + 0.5, 0.0035, cell.y + 0.5);
     cellDummy.rotation.set(-Math.PI / 2, 0, 0);
     cellDummy.updateMatrix();
@@ -1363,7 +1474,6 @@ function syncSnake(dt) {
     const head = visual[0];
     eyes.position.set(head.x, head.y + 0.16, head.z);
     eyes.rotation.y = headYaw;
-    headLight.position.set(head.x, head.y + 1.15, head.z);
   }
 }
 
@@ -1668,7 +1778,8 @@ function updateWinFx() {
 
 function reset() {
   state = createState();
-  visualCount = 0;
+  trail.length = 0;
+  resetTrail();
   yawReady = false;
   appleClock = 0;
   deadAt = 0;
@@ -1748,6 +1859,7 @@ function frame(ms) {
       state.dir = chooseMove(state);
 
       const res = step(state);
+      if (res.moved) pushTrail();
       if (res.ate) {
         removeAppleMesh(res.ate);
         setWorld(res.ate, tmpVec);

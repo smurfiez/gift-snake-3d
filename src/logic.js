@@ -52,36 +52,52 @@ function hamiltonCycle(w, h) {
     for (let x = w - 1; x >= 1; x--) cells.push({ x, y: 0 });
   }
 
-  const order = new Map();
-  for (let i = 0; i < cells.length; i++) order.set(key(cells[i]), i);
-  const cycle = { cells, order, n: cells.length };
+  const ids = new Int32Array(w * h).fill(-1);
+  for (let i = 0; i < cells.length; i++) ids[cells[i].y * w + cells[i].x] = i;
+  const cycle = { cells, ids, w, h, n: cells.length };
   cycleCache.set(ck, cycle);
   return cycle;
 }
 
-function cycleMove(state, cycle, body) {
-  const head = body[0];
-  const idx = cycle.order.get(key(head));
-  if (idx === undefined) return null;
-  const target = cycle.cells[(idx + 1) % cycle.n];
-  for (let i = 0; i < body.length - 1; i++) {
-    if (same(body[i], target)) return null;
-  }
-  for (const d of DIRS) {
-    if (head.x + d.x === target.x && head.y + d.y === target.y) return d;
-  }
-  return null;
+function cycleIndex(cycle, p) {
+  if (p.x < 0 || p.y < 0 || p.x >= cycle.w || p.y >= cycle.h) return -1;
+  return cycle.ids[p.y * cycle.w + p.x];
 }
 
-function cycleAligned(cycle, body) {
-  const n = cycle.n;
-  const headIdx = cycle.order.get(key(body[0]));
-  if (headIdx === undefined) return false;
+// The body is ordered when, read head to tail, each segment sits strictly
+// further behind the head along the cycle. While that holds the cell after the
+// head on the cycle can never be part of the body, so the snake can keep
+// moving around the cycle forever without ever meeting itself.
+function cycleOrdered(cycle, body) {
+  const headIdx = cycleIndex(cycle, body[0]);
+  if (headIdx < 0) return false;
+  let prev = 0;
   for (let i = 1; i < body.length; i++) {
-    const idx = cycle.order.get(key(body[i]));
-    if (idx === undefined || idx !== (headIdx - i + n * 2) % n) return false;
+    const idx = cycleIndex(cycle, body[i]);
+    if (idx < 0) return false;
+    const behind = (headIdx - idx + cycle.n) % cycle.n;
+    if (behind <= prev) return false;
+    prev = behind;
   }
   return true;
+}
+
+// A jump is safe when the body it leaves is still ordered, i.e. every survivor
+// stays strictly behind the new head along the cycle. Returns the index the
+// head would land on, or -1 when the jump would break the invariant.
+function jumpKeepsOrder(cycle, body, target, eats) {
+  const targetIdx = cycleIndex(cycle, target);
+  if (targetIdx < 0) return -1;
+  const last = eats ? body.length - 1 : body.length - 2;
+  let prev = 0;
+  for (let i = 0; i <= last; i++) {
+    const idx = cycleIndex(cycle, body[i]);
+    if (idx < 0) return -1;
+    const behind = (targetIdx - idx + cycle.n) % cycle.n;
+    if (behind <= prev) return -1;
+    prev = behind;
+  }
+  return targetIdx;
 }
 
 export function createState(rand = Math.random) {
@@ -341,43 +357,75 @@ function tailReachableAfter(state, body, d) {
   return !!shortestPathTo(state, after, [after[after.length - 1]]);
 }
 
-// Food-first agent:
-// 1. if any apple is reachable, take the first step of the shortest path to
-//    the nearest one; no tail, escape or cycle check may veto that move, so
-//    the snake may box itself in and die. A bomb during the rescue is the
-//    player's way out.
-// 2. otherwise follow the Hamiltonian cycle; the body starts on it and stays
-//    aligned, so the snake sweeps every cell without boxing itself in
-// 3. otherwise take a longer side-stepping path to the tail
-// 4. otherwise move away from the food to open space
-export function chooseMove(state, rand = Math.random) {
-  if (state.dead || state.won || state.rescuing) return { ...state.dir };
+// Every ordered move from the current head. The ordered set is closed under
+// taking another ordered move, so each of these is safe on its own.
+function orderedMoves(state, cycle, body) {
+  const head = body[0];
+  const headIdx = cycleIndex(cycle, head);
+  if (headIdx < 0) return [];
+  const out = [];
+  for (const d of DIRS) {
+    const target = { x: head.x + d.x, y: head.y + d.y };
+    if (!inBounds(state, target)) continue;
+    const idx = jumpKeepsOrder(cycle, body, target, !!appleAt(state, target));
+    if (idx < 0) continue;
+    out.push({ dir: d, idx, delta: (idx - headIdx + cycle.n) % cycle.n });
+  }
+  return out;
+}
 
-  const body = state.snake;
-  if (!body.length) return { ...state.dir };
+// How far ahead along the cycle the closest apple sits.
+function cycleDistanceToFood(cycle, fromIdx, apples) {
+  let best = cycle.n;
+  for (const a of apples) {
+    const idx = cycleIndex(cycle, a);
+    if (idx < 0) continue;
+    const dist = (idx - fromIdx + cycle.n) % cycle.n;
+    if (dist < best) best = dist;
+  }
+  return best;
+}
 
+// Hamiltonian agent. Follow the cycle, but jump ahead to any cell whose jump
+// keeps the body ordered: that is what puts apples in reach without ever
+// closing the snake on itself. When the safest jump and the cycle step tie,
+// the short step wins, so the snake slides back onto the cycle as it grows.
+function cycleSeek(state, cycle, body, rand) {
+  if (!cycleOrdered(cycle, body)) return null;
+  const moves = orderedMoves(state, cycle, body);
+  if (!moves.length) return null;
+
+  for (const m of moves) m.food = cycleDistanceToFood(cycle, m.idx, state.apples);
+  moves.sort((a, b) => a.food - b.food || a.delta - b.delta);
+
+  // Equal-scoring jumps are rare, so occasionally take the runner-up to keep
+  // the movement line from replaying itself every round.
+  if (moves.length > 1 && rand() < 0.05) {
+    return { ...moves[1 + ((rand() * (moves.length - 1)) | 0)].dir };
+  }
+  return { ...moves[0].dir };
+}
+
+// Fallback for boards or bodies the cycle cannot vouch for (odd-by-odd sizes,
+// hand-made test positions). Food first, but only along routes that leave the
+// tail reachable; when nothing is safe it still eats rather than stall.
+function greedySeek(state, body, rand) {
+  const blocked = bodySet(body);
   const foodPaths = state.apples
     .map((a) => shortestPathTo(state, body, [a], rand))
     .filter((p) => p && p.path.length)
     .sort((a, b) => a.path.length - b.path.length);
   if (foodPaths.length) {
-    // Equal-length routes are common; roll between them so consecutive rounds
-    // do not replay the exact same movement line.
     const best = foodPaths[0].path.length;
     const tied = foodPaths.filter((p) => p.path.length === best);
-    return { ...tied[(rand() * tied.length) | 0].path[0] };
+    const open = tied.filter((p) => tailReachableAfter(state, body, p.path[0]));
+    const pool = open.length ? open : tied;
+    return { ...pool[(rand() * pool.length) | 0].path[0] };
   }
 
-  const blocked = bodySet(body);
   const options = neighborList(state, blocked, body[0]);
   if (!options.length) return { ...state.dir };
   const safe = options.filter((o) => tailReachableAfter(state, body, o.d));
-
-  const cycle = hamiltonCycle(state.w, state.h);
-  if (cycle && cycleAligned(cycle, body)) {
-    const d = cycleMove(state, cycle, body);
-    if (d) return { ...d };
-  }
 
   const tailPath = shortestPathTo(state, body, [body[body.length - 1]]);
   if (tailPath && tailPath.path.length) {
@@ -393,5 +441,19 @@ export function chooseMove(state, rand = Math.random) {
     );
   }
   return { ...picks[0].d };
+}
+
+export function chooseMove(state, rand = Math.random) {
+  if (state.dead || state.won || state.rescuing) return { ...state.dir };
+
+  const body = state.snake;
+  if (!body.length) return { ...state.dir };
+
+  const cycle = hamiltonCycle(state.w, state.h);
+  if (cycle) {
+    const move = cycleSeek(state, cycle, body, rand);
+    if (move) return move;
+  }
+  return greedySeek(state, body, rand);
 }
 
