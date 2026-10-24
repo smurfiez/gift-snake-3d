@@ -247,13 +247,12 @@ test('the moving snake eats apples as the order reaches them', () => {
     const rand = seeded(seed);
     const state = createState(rand);
     let ticks = 0;
-    while (!state.dead && !state.rescuing && state.eaten === 0 && ticks < 320) {
+    while (!state.dead && state.eaten === 0 && ticks < 320) {
       state.dir = chooseMoveDetailed(state, rand).dir;
       step(state);
       ticks++;
     }
     assert.equal(state.dead, false, `seed ${seed} died at tick ${ticks}`);
-    assert.equal(state.rescuing, false, `seed ${seed} trapped itself`);
     assert.equal(state.eaten, 1, `seed ${seed} ate no apple within 320 ticks`);
   }
 });
@@ -270,7 +269,7 @@ test('every close-call move still passes the safety gate', () => {
       closeCalls++;
       assert.equal(info.gate, true, `close call ${closeCalls} at tick ${i} failed the gate`);
     }
-    if (state.dead || state.rescuing) break;
+    if (state.dead) break;
     state.dir = info.dir;
     const res = step(state);
     if (res.ate) spawnApple(state);
@@ -317,7 +316,7 @@ test('the snake shifts between concentric circle patterns mid-round instead of r
     const state = createState(rand);
     state.slipChance = 0;
     for (let t = 0; t < 350; t++) {
-      if (state.dead || state.rescuing) break;
+      if (state.dead) break;
       const info = chooseMoveDetailed(state, rand);
       state.dir = info.dir;
       const res = step(state);
@@ -345,7 +344,7 @@ test('different rounds start at varied board positions and execute distinct move
 
     const moves = [key(state.snake[0])];
     for (let t = 0; t < 45; t++) {
-      if (state.dead || state.rescuing) break;
+      if (state.dead) break;
       const cycBefore = fillOrder(state.w, state.h, state.variant);
       const i0 = cycBefore.ids[state.snake[0].y * state.w + state.snake[0].x];
       const info = chooseMoveDetailed(state, rand);

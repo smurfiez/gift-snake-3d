@@ -12,7 +12,6 @@ import {
   spawnGiftApple,
   appleAt,
   fillOrder,
-  updateRescue,
   updateWin,
 } from '../src/logic.js';
 
@@ -64,7 +63,7 @@ test('hitting the wall kills the snake', () => {
   assert.equal(res.reason, 'wall');
 });
 
-test('running into own body starts a rescue instead of killing the snake', () => {
+test('running into own body ends the round', () => {
   const state = createState(() => 0.5);
   state.snake = [
     { x: 2, y: 2 },
@@ -78,70 +77,9 @@ test('running into own body starts a rescue instead of killing the snake', () =>
   const res = step(state);
   assert.equal(res.died, true);
   assert.equal(res.reason, 'self');
-  assert.equal(res.rescue, true);
   assert.equal(res.moved, false);
-  assert.equal(state.dead, false);
-  assert.equal(state.rescuing, true);
-  assert.equal(state.rescueMs, CONFIG.rescueMs);
-  assert.deepEqual(state.snake, before);
-  assert.deepEqual(chooseMove(state), state.dir);
-});
-
-test('updateRescue expires into death after rescueMs', () => {
-  const state = createState(() => 0.5);
-  state.snake = [
-    { x: 2, y: 2 },
-    { x: 2, y: 3 },
-    { x: 1, y: 3 },
-    { x: 1, y: 2 },
-  ];
-  state.dir = { x: 0, y: 1 };
-  state.apples = [];
-  step(state);
-
-  const idle = updateRescue(state, CONFIG.rescueMs - 1);
-  assert.equal(idle.died, false);
-  assert.equal(idle.msLeft, 1);
-  assert.equal(state.dead, false);
-  assert.equal(state.rescuing, true);
-
-  const expired = updateRescue(state, 1);
-  assert.equal(expired.died, true);
-  assert.equal(state.rescuing, false);
-  assert.equal(state.rescueMs, 0);
   assert.equal(state.dead, true);
-});
-
-test('only a bomb is accepted while rescuing, and it ends the rescue', () => {
-  const state = createState(() => 0.5);
-  state.snake = [
-    { x: 2, y: 2 },
-    { x: 2, y: 3 },
-    { x: 1, y: 3 },
-    { x: 1, y: 2 },
-    { x: 1, y: 1 },
-    { x: 0, y: 1 },
-  ];
-  state.dir = { x: 0, y: 1 };
-  state.apples = [];
-  const tick = state.tickMs;
-  step(state);
-
-  for (const type of ['apple', 'speed', 'slow']) {
-    const res = applyGift(state, type);
-    assert.equal(res.ok, false, type);
-    assert.equal(state.apples.length, 0, type);
-    assert.equal(state.tickMs, tick, type);
-    assert.equal(state.rescuing, true, type);
-  }
-
-  const res = applyGift(state, 'bomb');
-  assert.equal(res.ok, true);
-  assert.equal(res.removed.length, CONFIG.bombCut);
-  assert.equal(state.rescuing, false);
-  assert.equal(state.rescueMs, 0);
-  assert.equal(state.dead, false);
-  assert.equal(updateRescue(state, CONFIG.rescueMs).died, false);
+  assert.deepEqual(state.snake, before);
 });
 
 test('eating an apple adds exactly one segment', () => {
@@ -336,7 +274,6 @@ test('filling the board starts a victory lap, then wins', () => {
   state.dir = move;
   const held = step(state);
   assert.equal(state.dead, false);
-  assert.equal(state.rescuing, false);
   assert.equal(state.snake.length, 4);
   assert.ok(held.moved || held.held);
 
@@ -763,7 +700,7 @@ const playToEnd = (seed, maxTicks = 20000) => {
   const appleTicks = Math.round(CONFIG.appleIntervalMs / CONFIG.tickMs);
   let ticks = 0;
   let clock = 0;
-  while (!state.won && !state.dead && !state.rescuing && ticks < maxTicks) {
+  while (!state.won && !state.dead && ticks < maxTicks) {
     state.dir = chooseMove(state, rand);
     step(state);
     updateWin(state, CONFIG.tickMs);
@@ -783,7 +720,7 @@ test('every seeded round ends instead of stalling', () => {
   for (let seed = 1; seed <= 5; seed++) {
     const { state, ticks } = playToEnd(seed);
     assert.ok(
-      state.won || state.dead || state.rescuing,
+      state.won || state.dead,
       `seed ${seed} stalled after ${ticks} ticks at length ${state.snake.length}`,
     );
     if (state.won) assert.equal(state.snake.length, state.w * state.h);

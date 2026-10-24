@@ -17,7 +17,6 @@ export const CONFIG = Object.freeze({
   giftApples: 1,
   bombCut: 2,
   maxBombs: 3,
-  rescueMs: 5000,
   restartMs: 3000,
   // After the board fills, the snake keeps moving for this long before the win
   // is awarded, so the round ends on a visible victory lap instead of a freeze.
@@ -31,7 +30,7 @@ export const CONFIG = Object.freeze({
   // How much the window shrinks per cell of body length.
   chaseFalloff: 12,
   // Chance per move that the AI misjudges and starts playing greedily for the
-  // rest of the round. Keeps the snake beatable, so a rescue actually matters.
+  // rest of the round. Keeps the snake beatable.
   slipChance: 0.00006,
   dramaChance: 0.2,
   dramaCooldown: 6,
@@ -490,8 +489,6 @@ export function createState(rand = Math.random, size = null) {
     won: false,
     filled: false,
     winMs: 0,
-    rescuing: false,
-    rescueMs: 0,
     bombs: [],
     variant,
     nextAppleId: 1,
@@ -659,7 +656,7 @@ export function eatBomb(state, bomb) {
 }
 
 export function step(state) {
-  if (state.dead || state.won || state.rescuing) return { moved: false };
+  if (state.dead || state.won) return { moved: false };
 
   state.lastMove = { ...state.dir };
   const head = state.snake[0];
@@ -677,9 +674,8 @@ export function step(state) {
   const body = apple ? state.snake : state.snake.slice(0, -1);
   if (body.some((s) => same(s, next))) {
     if (state.filled) return { moved: false, held: true, died: false };
-    state.rescuing = true;
-    state.rescueMs = CONFIG.rescueMs;
-    return { moved: false, died: true, reason: 'self', rescue: true };
+    state.dead = true;
+    return { moved: false, died: true, reason: 'self' };
   }
 
   state.snake.unshift(next);
@@ -728,17 +724,6 @@ export function updateWin(state, dtMs) {
   return { won: true };
 }
 
-// Self-collision freezes the snake; a bomb shortens it and ends the freeze.
-export function updateRescue(state, dtMs) {
-  if (!state.rescuing) return { died: false };
-  state.rescueMs -= dtMs;
-  if (state.rescueMs > 0) return { died: false, msLeft: state.rescueMs };
-  state.rescuing = false;
-  state.rescueMs = 0;
-  state.dead = true;
-  return { died: true };
-}
-
 // A grown board still needs a fill order: rings close on one shape, serpentine
 // on any board with one even side.
 function boardFits(w, h) {
@@ -752,7 +737,7 @@ function growBoard(state, type) {
   const w = type === 'widen' ? Math.min(CONFIG.maxBoardW, state.w + BOARD_GROW) : state.w;
   const h = type === 'taller' ? Math.min(CONFIG.maxBoardH, state.h + BOARD_GROW) : state.h;
   const grows = w > state.w || h > state.h;
-  const ok = grows && !state.dead && !state.won && !state.rescuing && boardFits(w, h);
+  const ok = grows && !state.dead && !state.won && boardFits(w, h);
   if (ok) {
     state.w = w;
     state.h = h;
@@ -763,7 +748,6 @@ function growBoard(state, type) {
 export function applyGift(state, type) {
   if (type === 'widen' || type === 'taller') return growBoard(state, type);
   if (state.dead || state.won) return { type, ok: false };
-  if (state.rescuing && type !== 'bomb') return { type, ok: false };
 
   switch (type) {
     case 'apple': {
@@ -775,19 +759,6 @@ export function applyGift(state, type) {
       return { type, ok: apples.length > 0, apples };
     }
     case 'bomb': {
-      // Bombs are board objects now: the snake has to eat one for the cut to
-      // happen. A rescue is the exception, because a frozen snake cannot move
-      // to reach it and that window is the only way out.
-      if (state.rescuing) {
-        const removable = Math.min(CONFIG.bombCut, state.snake.length - CONFIG.minLength);
-        const removed =
-          removable > 0 ? state.snake.splice(state.snake.length - removable, removable) : [];
-        if (removed.length) {
-          state.rescuing = false;
-          state.rescueMs = 0;
-        }
-        return { type, ok: removed.length > 0, removed, freed: removed.length > 0 };
-      }
       // The client animates the drop and only then calls spawnBombAt, so the
       // bomb is not on the board (and not edible) while it is falling. With no
       // free cell or the board already at the cap, the bomb is still delivered:
@@ -1482,7 +1453,7 @@ function hasSafeContinuation(state, body, margin) {
 //   4. only when nothing passes the gate, fall back to the cycle or the tail.
 export function chooseMoveDetailed(state, rand = Math.random) {
   const body = state.snake;
-  if (state.dead || state.won || state.rescuing || !body.length) {
+  if (state.dead || state.won || !body.length) {
     return { dir: { ...state.dir }, kind: 'idle', closeCall: false, gate: true, routeLen: 0 };
   }
 
@@ -1492,7 +1463,7 @@ export function chooseMoveDetailed(state, rand = Math.random) {
   }
 
   // A round can go wrong. One misjudged move makes the snake play greedily for
-  // the rest of the round, so it is beatable and the rescue window matters.
+  // the rest of the round, so it is beatable.
   const slip = state.slipChance ?? CONFIG.slipChance;
   if (!state.slipped && rand() < slip) state.slipped = true;
   if (state.slipped) {

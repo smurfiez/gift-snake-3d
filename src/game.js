@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, createState, step, spawnApple, spawnGiftApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateRescue, updateWin, freeCellFor } from './logic.js';
+import { CONFIG, createState, step, spawnApple, spawnGiftApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateWin, freeCellFor } from './logic.js';
 import { APRON, apronPoint, walkStep, faceYaw, clearOf, segmentClear, sceneryLayout } from './apron.js';
 import { normaliseTotals, bumpTotals } from './totals.js';
 
@@ -2380,7 +2380,7 @@ function syncSnake(dt) {
 
   // Logical ticks jump one cell; visualP slides the body along the trail
   // between them so spacing stays exactly one cell through corners.
-  if (!state.dead && !state.won && !state.rescuing) {
+  if (!state.dead && !state.won) {
     // Track the tick accumulator instead of adding a per-frame fraction: with
     // several logic ticks in one frame (debug 5×+) the fraction capped at 1 and
     // the visual trail fell further and further behind the body.
@@ -2651,8 +2651,7 @@ function applyDebug() {
 }
 
 // Debug gift feed: drops gifts at a viewer-ish rate so a round can be watched
-// end to end without tapping. Bombs go out during a rescue so that escape gets
-// exercised too.
+// end to end without tapping.
 const SIM_GIFTS = ['apple', 'apple', 'apple', 'bomb', 'bomb', 'speed', 'slow'];
 const SIM_GIFT_EVERY = 1.6;
 
@@ -2661,7 +2660,7 @@ function simGiftTick(dt) {
   giftClock += dt;
   if (giftClock < SIM_GIFT_EVERY) return;
   giftClock = 0;
-  sendGift(state.rescuing ? 'bomb' : pick(SIM_GIFTS));
+  sendGift(pick(SIM_GIFTS));
 }
 
 function toggleDebug(force) {
@@ -2727,8 +2726,7 @@ function refreshRecord() {
   hud.statLosses.textContent = record.losses;
 }
 
-// One result per round: a rescue that is bombed free is not a loss, and a
-// manual restart counts as neither.
+// One result per round: a manual restart counts as neither.
 function bumpRecord(field) {
   if (roundCounted) return;
   roundCounted = true;
@@ -2766,11 +2764,6 @@ function sendGift(type) {
   if (state.dead || state.won) {
     sfx.error();
     toast('Round over — press <b>R</b> to restart', 'bad');
-    return;
-  }
-  if (state.rescuing && type !== 'bomb') {
-    sfx.error();
-    toast('💣 Rescue: send a bomb to free the snake', 'bad');
     return;
   }
   const gift = GIFTS[type];
@@ -2811,31 +2804,13 @@ function sendGift(type) {
       return;
     }
     sfx.gift(type);
-    if (ev.freed) {
-      // Rescue path: the bomb detonates on drop so the snake gets its tail back.
-      for (const s of ev.removed) {
-        setWorld(s, tmpVec);
-        tmpVec.y = 0.5;
-        burst(tmpVec, BURST.bomb, { count: 8, power: 0.8 });
-      }
-      bombDebris(ev.removed);
-      shakeMag = Math.max(shakeMag, 0.6);
-      fovPunch(3);
-      flash('#ff5a2d');
-      acc = 0;
-      hideBanner();
-      flash('#9dff3d');
-      toast(`💣 <b>@${viewer} freed the snake</b>`, 'good');
-      logGift(type, viewer, ev.removed.length);
-    } else {
-      startDrop([ev.cell], nextDropVariant(), 'bomb', viewer);
-      camPunch += 0.5;
-      shakeMag = Math.max(shakeMag, 0.25);
-      flash('#ff8a3d', '33');
-      toast(`💣 <b>@${viewer}</b> dropped a bomb`, 'bad');
-      logGift(type, viewer);
-      countGift(viewer, 'bomb');
-    }
+    startDrop([ev.cell], nextDropVariant(), 'bomb', viewer);
+    camPunch += 0.5;
+    shakeMag = Math.max(shakeMag, 0.25);
+    flash('#ff8a3d', '33');
+    toast(`💣 <b>@${viewer}</b> dropped a bomb`, 'bad');
+    logGift(type, viewer);
+    countGift(viewer, 'bomb');
   } else if (type === 'speed' || type === 'slow') {
     sfx.gift(type);
     setWorld(state.snake[0], tmpVec);
@@ -2866,25 +2841,6 @@ function sendGift(type) {
 }
 
 // ---------- lifecycle ----------
-function onRescue() {
-  shakeMag = Math.max(shakeMag, 0.45);
-  fovPunch(2.5);
-  sfx.crash();
-  if (state.snake[0]) {
-    setWorld(state.snake[0], tmpVec);
-    tmpVec.y = 0.6;
-    burst(tmpVec, BURST.crash);
-  }
-  flash('#ffc14d');
-  showBanner('TAIL HIT', rescueText(), 'bad');
-}
-
-// Rescue banner text, rewritten every frame so the seconds count down.
-function rescueText() {
-  const left = Math.ceil(state.rescueMs / 1000);
-  return `💣 send a bomb to free the snake · ${left}s left`;
-}
-
 function onDeath() {
   bumpRecord('losses');
   deadAt = clock;
@@ -3015,14 +2971,6 @@ function frame(ms) {
   const dt = raw > 0 ? Math.min(0.05, raw) : 0;
   clock += dt;
 
-  if (state.rescuing) {
-    const r = updateRescue(state, dt * 1000);
-    if (hud.banner.classList.contains('show')) {
-      hud.bannerSub.textContent = rescueText();
-    }
-    if (r.died) onDeath();
-  }
-
   const win = updateWin(state, dt * 1000);
   if (win.won) {
     wonAt = clock;
@@ -3038,7 +2986,7 @@ function frame(ms) {
   }
 
   simGiftTick(dt);
-  const live = !state.dead && !state.won && !state.rescuing;
+  const live = !state.dead && !state.won;
 
   if (live) {
     acc += dt * 1000 * debugSpeed;
@@ -3080,11 +3028,8 @@ function frame(ms) {
         shakeMag = Math.max(shakeMag, 0.4);
         flash('#ff8a3d', '55');
       }
-      if (res.died) {
-        if (res.rescue) onRescue();
-        else onDeath();
-      }
-      if (state.dead || state.won || state.rescuing) {
+      if (res.died) onDeath();
+      if (state.dead || state.won) {
         acc = 0;
         break;
       }

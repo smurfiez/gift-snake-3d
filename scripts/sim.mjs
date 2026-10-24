@@ -27,7 +27,7 @@ export function playRound(seed, maxTicks = 20000) {
   let slips = 0;
   const kinds = {};
 
-  while (!state.won && !state.dead && !state.rescuing && ticks < maxTicks) {
+  while (!state.won && !state.dead && ticks < maxTicks) {
     const info = chooseMoveDetailed(state, rand);
     if (info.closeCall) closeCalls++;
     if (info.kind === 'drama') drama++;
@@ -58,7 +58,6 @@ export function run(rounds = 500, maxTicks = 20000) {
     wins: 0,
     wall: 0,
     self: 0,
-    rescues: 0,
     stalled: 0,
     gateViolations: 0,
     closeCalls: 0,
@@ -77,7 +76,6 @@ export function run(rounds = 500, maxTicks = 20000) {
     stats.ticks.push(r.ticks);
     if (r.firstAppleTick !== null) stats.firstAppleTicks.push(r.firstAppleTick);
     if (r.state.won) stats.wins++;
-    else if (r.state.rescuing) stats.rescues++;
     else if (r.state.dead) stats.wall++;
     else stats.stalled++;
     stats.self += r.selfDeaths;
