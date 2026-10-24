@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, createState, step, spawnApple, spawnGiftApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateRescue, updateWin, freeCellFor } from './logic.js';
+import { sceneryLayout } from './apron.js';
 
 const $ = (s) => document.querySelector(s);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -592,6 +593,7 @@ function layoutBoard() {
   snapBoard();
   paintChecker();
   layoutSpectators();
+  layoutScenery();
 }
 
 // snake: one continuous tube swept along the eased visual path
@@ -1775,6 +1777,92 @@ function updateSpectators(dt) {
     s.arm.rotation.x *= Math.max(0, 1 - dt * 8);
     s.fig.rotation.x *= Math.max(0, 1 - dt * 8);
     if (j.restT > 0.55) s.job = null;
+  }
+}
+
+// ---------- scenery props ----------
+// Static dressing on the apron: bushes, rocks, flowers and crates so the rim
+// reads as a place instead of empty stage. The layout is pure (see apron.js) and
+// stays outside the wall, so every board resize simply rebuilds the ring.
+const sceneryGroup = new THREE.Group();
+scene.add(sceneryGroup);
+
+const bushGeo = new THREE.IcosahedronGeometry(0.29, 0);
+const bushMat = new THREE.MeshToonMaterial({ color: 0x9ed07a, gradientMap: toonRamp });
+const rockGeo = new THREE.DodecahedronGeometry(0.3, 0);
+const rockMat = new THREE.MeshToonMaterial({ color: 0xbfb3cc, gradientMap: toonRamp });
+const flowerStemGeo = new THREE.CylinderGeometry(0.022, 0.022, 0.42, 5);
+const flowerStemMat = new THREE.MeshToonMaterial({ color: 0x8fc98a, gradientMap: toonRamp });
+const flowerHeadGeo = new THREE.SphereGeometry(0.12, 10, 8);
+const flowerHeadMat = new THREE.MeshToonMaterial({ color: 0xff9fc0, gradientMap: toonRamp });
+const crateGeo = new THREE.BoxGeometry(0.46, 0.4, 0.46);
+const cratePostGeo = new THREE.BoxGeometry(0.075, 0.44, 0.075);
+const crateMat = new THREE.MeshToonMaterial({ color: 0xd9a56d, gradientMap: toonRamp });
+const cratePostMat = new THREE.MeshToonMaterial({ color: 0xc28a52, gradientMap: toonRamp });
+
+// Three overlapping lobes: cheaper than a sculpt and reads as a bush from above.
+function makeBush() {
+  const g = new THREE.Group();
+  const lobes = [[0, 0.22, 0, 1], [-0.17, 0.16, 0.09, 0.72], [0.15, 0.18, -0.08, 0.64]];
+  for (const [x, y, z, s] of lobes) {
+    const lobe = new THREE.Mesh(bushGeo, bushMat);
+    lobe.position.set(x, y, z);
+    lobe.scale.set(s, s * 0.84, s);
+    g.add(lobe);
+  }
+  return g;
+}
+
+function makeRock() {
+  const g = new THREE.Group();
+  const rock = new THREE.Mesh(rockGeo, rockMat);
+  rock.position.y = 0.17;
+  rock.scale.set(1, 0.72, 0.9);
+  rock.rotation.y = 0.6;
+  g.add(rock);
+  return g;
+}
+
+function makeFlower() {
+  const g = new THREE.Group();
+  const stem = new THREE.Mesh(flowerStemGeo, flowerStemMat);
+  stem.position.y = 0.21;
+  g.add(stem);
+  const head = new THREE.Mesh(flowerHeadGeo, flowerHeadMat);
+  head.position.y = 0.46;
+  g.add(head);
+  return g;
+}
+
+// Corner posts soften the box silhouette into something closer to a rounded crate.
+function makeCrate() {
+  const g = new THREE.Group();
+  const box = new THREE.Mesh(crateGeo, crateMat);
+  box.position.y = 0.2;
+  g.add(box);
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      const post = new THREE.Mesh(cratePostGeo, cratePostMat);
+      post.position.set(sx * 0.2, 0.22, sz * 0.2);
+      g.add(post);
+    }
+  }
+  return g;
+}
+
+const PROP_FACTORIES = { bush: makeBush, rock: makeRock, flower: makeFlower, crate: makeCrate };
+
+function layoutScenery() {
+  // Geometry and materials are shared by every prop, so a rebuild drops the
+  // groups only and never disposes them.
+  sceneryGroup.clear();
+  for (const item of sceneryLayout(state.w, state.h)) {
+    const prop = PROP_FACTORIES[item.kind]();
+    prop.position.set(item.x, 0, item.z);
+    prop.rotation.y = item.rot;
+    prop.scale.setScalar(item.scale);
+    prop.userData.kind = item.kind;
+    sceneryGroup.add(prop);
   }
 }
 

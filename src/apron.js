@@ -1,4 +1,4 @@
-export const APRON = Object.freeze({ near: 0.7, far: 2.5, frontBias: 0.72, spacing: 0.85 });
+export const APRON = Object.freeze({ near: 0.7, far: 1.6, frontBias: 0.72, spacing: 0.85 });
 
 const SCENERY_KINDS = ['bush', 'rock', 'flower', 'crate'];
 
