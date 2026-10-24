@@ -40,8 +40,8 @@
         --focus: #cf4f82;
         --body-bg: radial-gradient(ellipse at 50% 30%, #f3e2ec, #dfc8d8 70%);
         --mono: "Nunito", "Quicksand", ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", system-ui, sans-serif;
-        --stage-h: 66%;
-        --deck-h: 34%;
+        --stage-h: 76%;
+        --deck-h: 24%;
 
         /* deck scale: tied to viewport height because the deck is a height slice */
         --pad: clamp(10px, 1cqh, 20px);
@@ -228,9 +228,9 @@
         position: absolute; inset: auto 0 0 0;
         height: var(--deck-h);
         display: grid;
-        grid-template-columns: minmax(300px, 36%) 1fr;
-        gap: var(--gap);
-        padding: var(--pad);
+        grid-template-columns: minmax(220px, 34%) 1fr;
+        gap: clamp(6px, 0.6cqh, 10px);
+        padding: clamp(6px, 0.7cqh, 12px);
         background: var(--deck-bg);
         border-top: 1px solid var(--line);
       }
@@ -238,8 +238,8 @@
       /* scoreboard */
 
       .score {
-        display: flex; flex-direction: column; gap: var(--gap);
-        padding: var(--pad) calc(var(--pad) + 2px);
+        display: flex; flex-direction: column; gap: clamp(4px, 0.5cqh, 9px);
+        padding: clamp(6px, 0.7cqh, 12px) clamp(8px, 0.8cqw, 14px);
         min-height: 0;
       }
 
@@ -265,46 +265,6 @@
         background: var(--surface-faint);
         white-space: nowrap;
       }
-
-      .k {
-        display: block;
-        font-size: var(--t-xs); font-weight: 700; letter-spacing: 0.08em;
-        color: var(--muted);
-      }
-
-      .stat b {
-        display: block;
-        font-size: var(--t-md); font-weight: 600; letter-spacing: 0.05em;
-        font-variant-numeric: tabular-nums;
-        color: var(--text);
-      }
-
-      .stat-lead b {
-        margin-top: clamp(2px, 0.4cqh, 6px);
-        font-size: var(--t-lead);
-        line-height: 1; font-weight: 900;
-        letter-spacing: 0.01em;
-        color: var(--text);
-      }
-
-      .row {
-        display: grid; grid-template-columns: 1fr 1fr; gap: 0;
-        padding-top: var(--gap);
-        border-top: 1px solid var(--line);
-      }
-      .row .stat:last-child {
-        padding-left: clamp(10px, 1cqw, 18px);
-        border-left: 1px solid var(--line);
-      }
-      .row .stat b {
-        margin-top: clamp(2px, 0.4cqh, 6px);
-        font-size: var(--t-lg); color: var(--text);
-      }
-      .row .stat:last-child b { color: var(--text); }
-      .row.eats { border-top: none; padding-top: 0; }
-      .row.eats .stat b { font-size: var(--t-lead); font-weight: 900; }
-      #hud-apples { color: var(--lime); }
-      #hud-bombs { color: var(--orange); }
 
       .log {
         margin-top: 0; min-height: 0; overflow: hidden;
@@ -338,8 +298,8 @@
       /* gift table */
 
       .gifts-wrap {
-        display: flex; flex-direction: column; gap: var(--gap);
-        padding: var(--pad) calc(var(--pad) + 2px) calc(var(--pad) + 2px);
+        display: flex; flex-direction: column; gap: clamp(4px, 0.5cqh, 9px);
+        padding: clamp(6px, 0.7cqh, 12px) clamp(8px, 0.8cqw, 14px);
         min-height: 0;
       }
       .head-right { display: flex; align-items: center; gap: clamp(6px, 0.8cqw, 12px); }
@@ -375,7 +335,7 @@
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         grid-template-rows: repeat(3, minmax(0, 1fr));
-        gap: var(--gap);
+        gap: clamp(4px, 0.5cqh, 10px);
         min-height: 0;
       }
 
@@ -383,11 +343,12 @@
         --c: var(--cyan);
         position: relative;
         display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        grid-template-areas: "ico key" "name name" "desc desc";
-        align-content: space-between;
-        gap: clamp(2px, 0.4cqh, 8px) clamp(6px, 0.8cqw, 12px);
-        padding: clamp(9px, 1.1cqh, 18px) clamp(10px, 1cqw, 18px);
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        grid-template-areas: "ico name key" "ico desc key";
+        align-items: center;
+        column-gap: clamp(6px, 0.7cqw, 12px);
+        row-gap: 1px;
+        padding: clamp(4px, 0.55cqh, 9px) clamp(6px, 0.7cqw, 12px);
         text-align: left; cursor: pointer;
         color: var(--text); font: inherit;
         border: 1px solid var(--line);
@@ -416,38 +377,41 @@
 
       .gift-ico {
         grid-area: ico;
-        justify-self: start; align-self: start;
+        justify-self: start; align-self: center;
         display: grid; place-items: center;
-        min-width: 1.6em; min-height: 1.6em;
-        padding: 0 0.1em;
-        font-size: clamp(20px, 3.4cqh, 50px); line-height: 1;
+        width: clamp(30px, 4.2cqh, 52px);
+        height: clamp(30px, 4.2cqh, 52px);
+        padding: clamp(2px, 0.3cqh, 5px);
+        line-height: 1;
         border: 1px solid var(--line);
-        border-radius: clamp(12px, 1.4cqh, 18px);
-        background: var(--surface-hi);
-        box-shadow: 0 3px 8px -6px rgba(94, 56, 80, 0.3);
+        border-radius: clamp(9px, 1.1cqh, 14px);
+        background: var(--surface-faint);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
         transition: transform 140ms ease;
       }
-      .gift:hover .gift-ico { transform: scale(1.06) rotate(-3deg); }
-      .gift-img { width: clamp(34px, 4.4cqw, 56px); height: auto; display: block; }
-      .gift-fallback { font-size: clamp(22px, 3cqw, 34px); line-height: 1; }
+      .gift:hover .gift-ico { transform: scale(1.05) rotate(-3deg); }
+      .gift-img { width: 100%; height: 100%; display: block; }
+      .gift-fallback { font-size: clamp(16px, 2.4cqh, 30px); line-height: 1; }
 
       .gift-txt { display: contents; }
       .gift-name {
         grid-area: name;
         min-width: 0;
-        font-size: var(--t-md);
-        font-weight: 700; letter-spacing: 0.04em;
+        font-size: var(--t-sm);
+        font-weight: 800; letter-spacing: 0.03em;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
       .gift-desc {
         grid-area: desc;
-        font-size: var(--t-sm); letter-spacing: 0.02em;
+        min-width: 0;
+        font-size: var(--t-micro); letter-spacing: 0.02em;
         color: var(--muted);
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
 
       .gift-key {
         grid-area: key;
+        align-self: center;
         min-width: clamp(20px, 2.2cqh, 34px); height: clamp(20px, 2.2cqh, 34px); padding: 0 4px;
         display: grid; place-items: center;
         font: 700 var(--t-xs)/1 var(--mono);
@@ -631,45 +595,37 @@
       /* ---------- responsive ---------- */
 
       @container (max-width: 900px) {
-        .deck { grid-template-columns: minmax(200px, 40%) 1fr; }
-        .gift-desc { display: none; }
-        .gift { grid-template-areas: "ico key" "name name"; }
-        .log { display: none; }
+        .deck { grid-template-columns: minmax(140px, 34%) 1fr; }
         .toasts { width: min(340px, 62cqw); }
       }
 
       @container (max-width: 640px) {
-        .stage { height: 62%; }
+        .stage { height: 74%; }
         .deck {
-          height: 38%;
-          grid-template-columns: minmax(96px, 38%) 1fr;
+          height: 26%;
+          grid-template-columns: minmax(110px, 34%) 1fr;
           grid-template-rows: 1fr;
           gap: 6px; padding: 6px;
         }
-        .score {
-          justify-content: space-between;
-          gap: 6px;
-          padding: 8px;
-        }
-        .score-head, .log, .head-right .panel-meta { display: none; }
-        .stat-lead b { font-size: clamp(20px, 4cqh, 32px); }
-        .score .row { padding-top: 6px; }
-        .row .stat b { font-size: 12px; white-space: nowrap; }
+        .head-right .panel-meta { display: none; }
+        .score-head .panel-meta { display: none; }
         .gifts-wrap { padding: 6px; gap: 4px; }
         .gifts { gap: 4px; }
         .gift {
-          padding: 6px;
-          gap: 2px 4px;
-          grid-template-areas: "ico key" "name name";
+          padding: 4px 6px;
+          column-gap: 5px;
         }
         .gift-ico {
-          min-width: 0; min-height: 0; padding: 0;
-          border: 0; border-radius: 0; background: none; box-shadow: none;
-          justify-self: start;
-          font-size: clamp(16px, 2.6cqh, 24px);
+          width: clamp(26px, 3.6cqh, 40px);
+          height: clamp(26px, 3.6cqh, 40px);
+          padding: 2px;
+          border-radius: 8px;
         }
         .gift-name { font-size: clamp(9px, 1.4cqh, 12px); }
+        .gift-desc { font-size: clamp(8px, 1.1cqh, 10px); }
         .gift-key { min-width: 18px; height: 18px; font-size: 9px; }
+        .log ul { gap: 4px; }
+        #log li { padding: 4px 6px; font-size: clamp(8px, 1.1cqh, 11px); }
         .toasts { width: min(280px, 76cqw); left: 10px; bottom: 10px; }
       }
 
@@ -749,11 +705,6 @@
         <div class="score-head">
           <span class="panel-title">SCOREBOARD</span>
           <span class="panel-meta">WIN · FULL BOARD</span>
-        </div>
-
-        <div class="row eats">
-          <div class="stat"><span class="k">APPLES EATEN</span><b id="hud-apples">0</b></div>
-          <div class="stat"><span class="k">BOMBS EATEN</span><b id="hud-bombs">0</b></div>
         </div>
 
         <div class="log">

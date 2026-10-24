@@ -21,8 +21,6 @@ const GIFTS = {
 };
 
 const hud = {
-  apples: $('#hud-apples'),
-  bombs: $('#hud-bombs'),
   statWins: $('#stat-wins'),
   statLosses: $('#stat-losses'),
   statApples: $('#stat-apples'),
@@ -1222,7 +1220,6 @@ function flyBombToMouth(cell) {
       bombDebris(cut);
       shakeMag = Math.max(shakeMag, 0.45);
       flash('#ff8a3d', '55');
-      refreshHud();
       return true;
     },
   });
@@ -1235,7 +1232,6 @@ function landBomb(cell) {
   const onSnake = state.snake.some((s) => s.x === cell.x && s.y === cell.y);
   const spot = onSnake ? freeCellFor(state) : cell;
   if (spot && spawnBombAt(state, spot)) {
-    refreshHud();
     camPunch += 0.15;
     return;
   }
@@ -2020,7 +2016,6 @@ function flushAppleBatch(viewer) {
   toast(`🍎 <b>@${viewer}</b> dropped ${label}`, 'good');
   logGift('apple', viewer, apples.length);
   countGift(viewer, 'apple', apples.length);
-  refreshHud();
 }
 
 // particles
@@ -2548,12 +2543,6 @@ function updateCamera(dt) {
   }
 }
 
-// ---------- hud ----------
-function refreshHud() {
-  hud.apples.textContent = state.eaten || 0;
-  hud.bombs.textContent = state.bombsEaten || 0;
-}
-
 // Session totals: per-round counters reset with the board, these do not.
 const TOTALS_KEY = 'giftsnake.totals';
 const totals = (() => {
@@ -2843,7 +2832,6 @@ function sendGift(type) {
       toast(`💣 <b>@${viewer}</b> dropped a bomb`, 'bad');
       logGift(type, viewer);
       countGift(viewer, 'bomb');
-      refreshHud();
     }
   } else if (type === 'speed' || type === 'slow') {
     sfx.gift(type);
@@ -2872,7 +2860,6 @@ function sendGift(type) {
     logGift(type, viewer);
   }
 
-  refreshHud();
 }
 
 // ---------- lifecycle ----------
@@ -2991,7 +2978,6 @@ function reset(keepGrowth = false) {
   layoutBoard();
   // Every new round advances the palette; boot does not call reset, so round one stays on theme 0.
   applyTheme(themeIndex + 1);
-  refreshHud();
   camDist = fitDistance();
   camTarget.set(state.w / 2, 0, state.h / 2);
   camBase.copy(CAM_DIR).multiplyScalar(camDist).add(camTarget);
@@ -3090,9 +3076,7 @@ function frame(ms) {
         bombDebris(res.removed || []);
         shakeMag = Math.max(shakeMag, 0.4);
         flash('#ff8a3d', '55');
-        refreshHud();
       }
-      if (res.moved) refreshHud();
       if (res.died) {
         if (res.rescue) onRescue();
         else onDeath();
@@ -3197,7 +3181,6 @@ if (window.ResizeObserver) new ResizeObserver(resize).observe(stageEl);
 // ---------- boot ----------
 applyTheme(0);
 layoutBoard();
-refreshHud();
 renderTotals();
 renderLeaderboard();
 refreshRecord();
