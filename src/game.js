@@ -1007,6 +1007,8 @@ function applyTheme(index) {
   headCell.material.color.set(th.accent);
 
   if (hud.statTheme) hud.statTheme.textContent = th.name.toUpperCase();
+  // The static aria-label would otherwise hide the visible palette name from assistive tech.
+  hud.themeBtn?.setAttribute('aria-label', `Change theme, current: ${th.name}`);
 }
 
 // apples
