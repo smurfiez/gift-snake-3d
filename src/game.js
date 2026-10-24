@@ -331,6 +331,8 @@ const CAM_FOV = 48;
 // Slight isometric: the camera sits 25° off straight down, on the +Z side, so
 // the board reads as a shallow diamond while rows still run top to bottom.
 const CAM_TILT = THREE.MathUtils.degToRad(25);
+// The stage rectangle is the board plus this ring, because the crowd lives there.
+const RIM_FRAME = 1.45;
 const CAM_DIR = new THREE.Vector3(0, Math.cos(CAM_TILT), Math.sin(CAM_TILT));
 const CAM_RIGHT = new THREE.Vector3(1, 0, 0);
 const CAM_UP = new THREE.Vector3(0, Math.sin(CAM_TILT), -Math.cos(CAM_TILT));
@@ -2098,27 +2100,29 @@ let camPunch = 0;
 let fovKick = 0;
 let nearMissAt = -9;
 
-// Framing sits on the width: the walled board spans the screen edge to edge, so
-// the rim crowd below it stays in frame on a vertical stream layout.
+// Framing fits the whole stage: board plus the rim ring the crowd stands on,
+// on both axes, so the apron stays in frame in a vertical stream layout.
 function fitDistance() {
   const halfV = THREE.MathUtils.degToRad(CAM_FOV) / 2;
   const halfH = Math.atan(Math.tan(halfV) * camera.aspect);
+  const tanV = Math.tan(halfV);
   const tanH = Math.tan(halfH);
   const cx = state.w / 2;
   const cz = state.h / 2;
   let d = 0;
-  for (const x of [0, state.w]) {
-    for (const z of [0, state.h]) {
-      for (const y of [0, 1.2]) {
+  for (const x of [-RIM_FRAME, state.w + RIM_FRAME]) {
+    for (const z of [-RIM_FRAME, state.h + RIM_FRAME]) {
+      for (const y of [0, 2.2]) {
         const rx = x - cx;
         const rz = z - cz;
         const along = rx * CAM_DIR.x + y * CAM_DIR.y + rz * CAM_DIR.z;
         const right = Math.abs(rx * CAM_RIGHT.x + rz * CAM_RIGHT.z);
-        d = Math.max(d, right / tanH + along);
+        const up = Math.abs(rx * CAM_UP.x + y * CAM_UP.y + rz * CAM_UP.z);
+        d = Math.max(d, right / tanH + along, up / tanV + along);
       }
     }
   }
-  return d * 1.02 + 0.4;
+  return d * 1.01 + 0.4;
 }
 
 const SNAKE_Y = 0.45;
