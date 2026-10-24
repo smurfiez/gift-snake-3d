@@ -331,8 +331,9 @@ const CAM_FOV = 48;
 // Slight isometric: the camera sits 25° off straight down, on the +Z side, so
 // the board reads as a shallow diamond while rows still run top to bottom.
 const CAM_TILT = THREE.MathUtils.degToRad(25);
-// The stage rectangle is the board plus this ring, because the crowd lives there.
-const RIM_FRAME = 1.45;
+// The stage rectangle is the board plus this ring: the framing margin that
+// keeps the apron (and most of the crowd standing on it) inside the frustum.
+const RIM_FRAME = 0.9;
 const CAM_DIR = new THREE.Vector3(0, Math.cos(CAM_TILT), Math.sin(CAM_TILT));
 const CAM_RIGHT = new THREE.Vector3(1, 0, 0);
 const CAM_UP = new THREE.Vector3(0, Math.sin(CAM_TILT), -Math.cos(CAM_TILT));
@@ -2112,7 +2113,7 @@ function fitDistance() {
   let d = 0;
   for (const x of [-RIM_FRAME, state.w + RIM_FRAME]) {
     for (const z of [-RIM_FRAME, state.h + RIM_FRAME]) {
-      for (const y of [0, 2.2]) {
+      for (const y of [0, 1.8]) {
         const rx = x - cx;
         const rz = z - cz;
         const along = rx * CAM_DIR.x + y * CAM_DIR.y + rz * CAM_DIR.z;
@@ -2122,7 +2123,7 @@ function fitDistance() {
       }
     }
   }
-  return d * 1.01 + 0.4;
+  return d * 1.005 + 0.08;
 }
 
 const SNAKE_Y = 0.45;
