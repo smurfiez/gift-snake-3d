@@ -7,11 +7,14 @@ const H = 17;
 const KINDS = ['bush', 'rock', 'flower', 'crate'];
 
 const insideApron = (p, w, h) => {
-  const outX = Math.min(Math.abs(p.x), Math.abs(w - p.x));
-  const outZ = Math.min(Math.abs(p.z), Math.abs(h - p.z));
+  // Per-axis distance to the board rectangle. The front band caps x inside the
+  // board and the side bands cap x at APRON.far, so max(dx, dz) bounds both.
+  // Euclidean distance cannot be used: the side bands legally reach
+  // hypot(far, near) = 2.596 at the front corners, past APRON.far.
+  const dx = p.x < 0 ? -p.x : p.x > w ? p.x - w : 0;
+  const dz = p.z < 0 ? -p.z : p.z > h ? p.z - h : 0;
   const outsideBoard = p.x < -0.01 || p.x > w + 0.01 || p.z < -0.01 || p.z > h + 0.01;
-  // Distance to the nearest board edge, so side-band samples mid-edge still count.
-  return outsideBoard && Math.min(outX, outZ) <= APRON.far + 0.001;
+  return outsideBoard && Math.max(dx, dz) <= APRON.far + 0.001;
 };
 
 const insideBoard = (p, w, h) =>
