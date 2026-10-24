@@ -45,15 +45,11 @@
 
         /* deck scale: tied to viewport height because the deck is a height slice */
         --pad: clamp(10px, 1cqh, 20px);
-        --gap: clamp(8px, 0.8cqh, 15px);
         --r-panel: clamp(12px, 1.5cqh, 20px);
         --r-tile: clamp(9px, 1cqh, 14px);
         --t-micro: clamp(8px, 0.7cqh, 13px);
         --t-xs: clamp(9px, 0.8cqh, 15px);
         --t-sm: clamp(10px, 0.92cqh, 18px);
-        --t-md: clamp(12px, 1.1cqh, 22px);
-        --t-lg: clamp(14px, 1.35cqh, 27px);
-        --t-lead: clamp(30px, min(5cqh, 5.3cqw), 76px);
       }
 
       /* Midnight theme: the only palette that repaints the deck surfaces as
@@ -186,12 +182,16 @@
         display: flex; align-items: center; justify-content: space-between;
         gap: clamp(6px, 0.8cqw, 12px);
         margin-top: clamp(2px, 0.3cqh, 4px);
-        padding-top: clamp(4px, 0.55cqh, 8px);
-        border-top: 1px solid var(--line);
-        font-size: var(--t-micro); font-weight: 800; letter-spacing: 0.08em;
-        color: var(--faint);
+        padding: clamp(4px, 0.55cqh, 8px) 0 0;
+        border: 0; border-top: 1px solid var(--line);
+        background: none; color: var(--faint);
+        font-family: inherit; font-size: var(--t-micro); font-weight: 800; letter-spacing: 0.08em;
+        text-align: left;
         white-space: nowrap; overflow: hidden;
+        cursor: pointer; pointer-events: auto;
       }
+      .stats-foot:hover { color: var(--muted); }
+      .stats-foot:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
       .stats-foot span { overflow: hidden; text-overflow: ellipsis; }
       .stats-foot .key {
         flex: none;
@@ -654,7 +654,7 @@
           <div class="stats-row"><span>LOSS</span><b id="stat-losses">0</b></div>
           <div class="stats-row"><span>APPLES</span><b id="stat-apples">0</b></div>
           <div class="stats-row"><span>BOMBS</span><b id="stat-bombs">0</b></div>
-          <div class="stats-foot"><span id="stat-theme">STRAWBERRY</span><kbd class="key">T</kbd></div>
+          <button class="stats-foot" id="stat-theme-btn" type="button" aria-keyshortcuts="T" aria-label="Change theme"><span id="stat-theme">STRAWBERRY</span><kbd class="key">T</kbd></button>
         </section>
       </header>
 

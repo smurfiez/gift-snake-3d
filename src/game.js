@@ -26,6 +26,7 @@ const hud = {
   statApples: $('#stat-apples'),
   statBombs: $('#stat-bombs'),
   statTheme: $('#stat-theme'),
+  themeBtn: $('#stat-theme-btn'),
   toasts: $('#toasts'),
   log: $('#log'),
   banner: $('#banner'),
@@ -3135,6 +3136,12 @@ window.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('pointerdown', unlockAudio, { once: true });
+
+// The palette chip sits inside .stage-hud (pointer-events: none), so it opts back in itself.
+hud.themeBtn?.addEventListener('click', () => {
+  unlockAudio();
+  applyTheme(themeIndex + 1);
+});
 
 hud.winLap.addEventListener('change', () => {
   victoryLap = hud.winLap.checked;
