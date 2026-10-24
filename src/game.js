@@ -1557,19 +1557,24 @@ function avatarTexture(name) {
   return tex;
 }
 
+// The crowd is scaled up so it reads next to the board; the hand origin and the
+// child sprites compensate so nothing drifts off the figure.
+const FIG_SCALE = 1.6;
+
 function makeSpectator() {
   const fig = makeThrower();
+  fig.scale.setScalar(FIG_SCALE);
   const pic = new THREE.Sprite(new THREE.SpriteMaterial({
     transparent: true, depthWrite: false,
   }));
-  pic.scale.set(0.66, 0.66, 1);
+  pic.scale.set(0.42, 0.42, 1);
   pic.position.y = 1.78;
   pic.visible = false;
   fig.add(pic);
   const bubble = new THREE.Sprite(new THREE.SpriteMaterial({
     transparent: true, depthWrite: false,
   }));
-  bubble.scale.set(1.5, 0.75, 1);
+  bubble.scale.set(0.94, 0.47, 1);
   bubble.position.y = 2.34;
   bubble.visible = false;
   fig.add(bubble);
@@ -1744,8 +1749,9 @@ function updateSpectators(dt) {
     const j = s.job;
     if (!j) {
       // A bubble holds the figure still: walkers stop to talk, then move on.
+      // `restT` is frozen too, so the pause never eats into the next idle spell.
       const paused = s.bubbleT > 0;
-      if (s.dest === null) {
+      if (!paused && s.dest === null) {
         s.restT -= dt;
         if (s.restT <= 0) {
           s.dest = walkTarget(s);
@@ -1823,8 +1829,8 @@ function updateSpectators(dt) {
       s.fig.rotation.x = 0.08;
       s.fig.updateMatrixWorld();
       throwFwd.set(0, 0, 1).applyQuaternion(s.fig.quaternion);
-      j.start.copy(s.fig.position).addScaledVector(throwFwd, 0.42);
-      j.start.y += 1.02;
+      j.start.copy(s.fig.position).addScaledVector(throwFwd, 0.42 * FIG_SCALE);
+      j.start.y += 1.02 * FIG_SCALE;
       const m = j.kind === 'bomb' ? makeBombMesh() : makeAppleMesh();
       m.scale.setScalar(0.9);
       m.position.copy(j.start);
@@ -1847,11 +1853,17 @@ function updateSpectators(dt) {
       continue;
     }
 
-    // Settle: the arm drops back to the loiter pose before the next gift.
+    // Settle: the arm drops back to the loiter pose before the next gift. The
+    // throw branch owns the arm until here, so the idle wave cannot fight it;
+    // zeroed on the last frame so the next idle pose starts from rest.
     j.restT += dt;
     s.arm.rotation.x *= Math.max(0, 1 - dt * 8);
     s.fig.rotation.x *= Math.max(0, 1 - dt * 8);
-    if (j.restT > 0.55) s.job = null;
+    if (j.restT > 0.55) {
+      s.arm.rotation.x = 0;
+      s.fig.rotation.x = 0;
+      s.job = null;
+    }
   }
 }
 
@@ -1935,7 +1947,7 @@ function layoutScenery() {
     const prop = PROP_FACTORIES[item.kind]();
     prop.position.set(item.x, 0, item.z);
     prop.rotation.y = item.rot;
-    prop.scale.setScalar(item.scale);
+    prop.scale.setScalar(item.scale * 1.25);
     prop.userData.kind = item.kind;
     sceneryGroup.add(prop);
   }
