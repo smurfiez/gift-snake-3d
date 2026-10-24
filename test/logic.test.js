@@ -345,6 +345,35 @@ test('filling the board starts a victory lap, then wins', () => {
   assert.equal(state.won, true);
 });
 
+test('a victory-lap apple cannot grow the snake past a full board', () => {
+  const state = createState(() => 0.5);
+  state.w = 2;
+  state.h = 2;
+  state.filled = true;
+  state.winMs = CONFIG.winDelayMs;
+  state.snake = [
+    { x: 0, y: 1 },
+    { x: 0, y: 0 },
+    { x: 1, y: 0 },
+    { x: 1, y: 1 },
+  ];
+  state.dir = { x: 1, y: 0 };
+  state.lastMove = { x: 1, y: 0 };
+  state.apples = [];
+
+  // No free cell, so the gift apple takes the tail and shortens the snake.
+  const apple = spawnGiftApple(state);
+  assert.ok(apple, 'expected the gift apple to land on the tail');
+  assert.equal(state.snake.length, 3);
+  assert.equal(apple.x, 1);
+  assert.equal(apple.y, 1);
+
+  step(state);
+  assert.equal(state.snake.length, 4);
+  assert.equal(state.filled, true);
+  assert.equal(state.won, false);
+});
+
 test('the victory lap can be switched off from the debug menu', () => {
   const state = createState(() => 0.5);
   state.winDelayMs = 0;

@@ -17,7 +17,7 @@ export const CONFIG = Object.freeze({
   giftApples: 1,
   bombCut: 2,
   maxBombs: 3,
-  rescueMs: 10000,
+  rescueMs: 5000,
   restartMs: 3000,
   // After the board fills, the snake keeps moving for this long before the win
   // is awarded, so the round ends on a visible victory lap instead of a freeze.
@@ -57,72 +57,51 @@ const same = (a, b) => a.x === b.x && a.y === b.y;
 
 const cycleCache = new Map();
 
-// Concentric-ring Hamiltonian cycle. Rings are peeled from the outside in, each
-// ring walking its perimeter except for one seam cell on the middle row; the
-// growing body therefore draws nested rectangles instead of stripes. Returns
-// null for shapes this construction cannot close, which then fall back to the
-// serpentine cycle below.
-//
-// Seam: row y = H/2, one cell per ring at x = ring index, walked back out at the
-// end; the final step closes onto the first cell.
-function ringCycle(w, h) {
+// Concentric-ring Hamiltonian cycle for a rectangular region. Rings are peeled
+// from the outside in, each ring walking its perimeter except for one seam cell
+// on row S; the growing body therefore draws nested concentric loops instead of
+// stripes. When `exact` is true, requires H === W + 1 (the classic square-ish
+// single bullseye); otherwise closes any rectangle where one side is even (W >= 4)
+// and the other side is at least W + 1, with an optional seam shift.
+function subRingCycle(w, h, seamShift = 0, exact = false) {
   let W = w;
   let H = h;
   let transposed = false;
-  if (W > H) {
-    const t = W;
-    W = H;
-    H = t;
+  if (w % 2 === 0 && (exact ? h === w + 1 : h >= w + 1)) {
+    W = w;
+    H = h;
+  } else if (h % 2 === 0 && (exact ? w === h + 1 : w >= h + 1)) {
+    W = h;
+    H = w;
     transposed = true;
+  } else {
+    return null;
   }
-  if (W % 2 !== 0 || H !== W + 1) return null;
+  if (W < 4) return null;
 
   const R = W / 2;
-  const S = H >> 1;
-  const ring = (x, y) => Math.min(x, y, W - 1 - x, H - 1 - y);
-  const isSeam = (x, y) => y === S && x === ring(x, y);
-  const used = new Uint8Array(W * H);
+  const minS = R;
+  const maxS = H - 1 - R;
+  const span = maxS - minS + 1;
+  const S = minS + ((((Math.floor(span / 2) + seamShift) % span) + span) % span);
   const path = [];
 
   for (let r = 0; r < R; r++) {
-    const startY = S - (r % 2 === 0 ? 1 : -1);
-    const endY = S + (r % 2 === 0 ? 1 : -1);
-    const ringSize = 2 * (W - 2 * r + H - 2 * r) - 4;
-    const local = new Set();
-    let x = r;
-    let y = startY;
-
-    for (;;) {
-      if (x < 0 || y < 0 || x >= W || y >= H) return null;
-      if (ring(x, y) !== r || isSeam(x, y)) return null;
-      const id = y * W + x;
-      if (used[id] || local.has(id)) return null;
-      local.add(id);
-      used[id] = 1;
-      path.push({ x, y });
-      if (x === r && y === endY) break;
-
-      let next = null;
-      for (const d of DIRS) {
-        const nx = x + d.x;
-        const ny = y + d.y;
-        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
-        if (ring(nx, ny) !== r || isSeam(nx, ny)) continue;
-        if (local.has(ny * W + nx)) continue;
-        next = [nx, ny];
-        break;
-      }
-      if (!next) return null;
-      [x, y] = next;
-    }
-
-    if (local.size !== ringSize - 1) return null;
+    const x0 = r;
+    const x1 = W - 1 - r;
+    const y0 = r;
+    const y1 = H - 1 - r;
+    const ring = [];
+    for (let y = S - 1; y >= y0; y--) ring.push({ x: x0, y });
+    for (let x = x0 + 1; x <= x1; x++) ring.push({ x, y: y0 });
+    for (let y = y0 + 1; y <= y1; y++) ring.push({ x: x1, y });
+    for (let x = x1 - 1; x >= x0; x--) ring.push({ x, y: y1 });
+    for (let y = y1 - 1; y >= S + 1; y--) ring.push({ x: x0, y });
+    if (r % 2 === 1) ring.reverse();
+    for (const c of ring) path.push(c);
   }
 
   for (let x = R - 1; x >= 0; x--) {
-    const id = S * W + x;
-    if (used[id]) return null;
-    used[id] = 1;
     path.push({ x, y: S });
   }
 
@@ -136,6 +115,164 @@ function ringCycle(w, h) {
     }
   }
   return path;
+}
+
+function ringCycle(w, h) {
+  return subRingCycle(w, h, 0, true);
+}
+
+function offsetCells(cells, dx, dy) {
+  return cells ? cells.map((c) => ({ x: c.x + dx, y: c.y + dy })) : null;
+}
+
+// Stitches two disjoint Hamiltonian cycles that share a boundary into a single
+// closed Hamiltonian cycle covering both regions.
+function stitchCycles(cycleA, cycleB, pickHint = 0) {
+  if (!cycleA || !cycleB) return null;
+  const nA = cycleA.length;
+  const nB = cycleB.length;
+  const bMap = new Map();
+  for (let j = 0; j < nB; j++) bMap.set(`${cycleB[j].x},${cycleB[j].y}`, j);
+
+  const bridges = [];
+  for (let i = 0; i < nA; i++) {
+    const a1 = cycleA[i];
+    const a2 = cycleA[(i + 1) % nA];
+    for (const d of DIRS) {
+      const j = bMap.get(`${a1.x + d.x},${a1.y + d.y}`);
+      if (j === undefined) continue;
+      const bNext = cycleB[(j + 1) % nB];
+      if (Math.abs(a2.x - bNext.x) + Math.abs(a2.y - bNext.y) === 1) {
+        bridges.push({ i, j, dir: -1 });
+      }
+      const bPrev = cycleB[(j - 1 + nB) % nB];
+      if (Math.abs(a2.x - bPrev.x) + Math.abs(a2.y - bPrev.y) === 1) {
+        bridges.push({ i, j, dir: 1 });
+      }
+    }
+  }
+  if (!bridges.length) return null;
+
+  const br = bridges[((pickHint % bridges.length) + bridges.length) % bridges.length];
+  const out = cycleA.slice(0, br.i + 1);
+  for (let k = 0; k < nB; k++) out.push(cycleB[(br.j + k * br.dir + nB) % nB]);
+  for (let k = br.i + 1; k < nA; k++) out.push(cycleA[k]);
+  return out;
+}
+
+// Twin concentric circles: two concentric-ring hubs (either horizontal stacked
+// or vertical side-by-side) stitched into a figure-8 or twin-spiral cycle.
+function twinRingCycle(w, h, mod = 0) {
+  if ((mod & 4) !== 0 && h >= 12 && w % 2 === 0) {
+    const h1 = mod & 1 && h - 8 >= 6 ? 8 : 6;
+    const h2 = h - h1;
+    const top = subRingCycle(w, h1, mod);
+    const bot = offsetCells(subRingCycle(w, h2, -mod), 0, h1);
+    if (top && bot) {
+      if (mod & 2) bot.reverse();
+      const stitched = stitchCycles(top, bot, mod * 3 + 1);
+      if (stitched) return stitched;
+    }
+  }
+  if (w % 2 === 0 && w >= 8) {
+    const half = 2 * Math.floor(w / 4);
+    const w1 = mod & 1 && half >= 6 && w - (half - 2) <= h - 1 ? half - 2 : half;
+    const w2 = w - w1;
+    if (w1 >= 4 && w2 >= 4 && h >= Math.max(w1, w2) + 1) {
+      const c1 = subRingCycle(w1, h, mod - 1);
+      const c2 = offsetCells(subRingCycle(w2, h, 1 - mod), w1, 0);
+      if (c1 && c2) {
+        if (mod & 2) c2.reverse();
+        const stitched = stitchCycles(c1, c2, mod * 3 + 1);
+        if (stitched) return stitched;
+      }
+    }
+  }
+  return subRingCycle(w, h, mod);
+}
+
+// Triple concentric circles: either a wide top concentric coil over two bottom
+// concentric coils, or three side-by-side concentric circle hubs.
+function tripleRingCycle(w, h, mod = 0) {
+  const hTop = 6;
+  const hBot = h - hTop;
+  if ((mod & 1) === 0 && w >= 12 && hBot >= 7) {
+    const w1 = 2 * Math.floor(w / 4);
+    const w2 = w - w1;
+    if (hBot >= Math.max(w1, w2) + 1) {
+      const top = subRingCycle(w, hTop, mod);
+      const bl = offsetCells(subRingCycle(w1, hBot, mod), 0, hTop);
+      const br = offsetCells(subRingCycle(w2, hBot, -mod), w1, hTop);
+      if (top && bl && br) {
+        if (mod & 2) br.reverse();
+        const bot = stitchCycles(bl, br, mod + 2);
+        const all = stitchCycles(top, bot, mod * 5 + 3);
+        if (all) return all;
+      }
+    }
+  }
+  if (w % 2 === 0 && w >= 14) {
+    const w1 = 2 * Math.floor(w / 6);
+    const w3 = w1;
+    const w2 = w - w1 - w3;
+    if (w1 >= 4 && w2 >= 4 && h >= Math.max(w1, w2) + 1) {
+      const c1 = subRingCycle(w1, h, mod);
+      const c2 = offsetCells(subRingCycle(w2, h, -mod), w1, 0);
+      const c3 = offsetCells(subRingCycle(w3, h, mod + 1), w1 + w2, 0);
+      if (c1 && c2 && c3) {
+        if (mod & 2) c2.reverse();
+        const all = stitchCycles(stitchCycles(c1, c2, mod + 1), c3, mod + 3);
+        if (all) return all;
+      }
+    }
+  }
+  return twinRingCycle(w, h, mod);
+}
+
+// Quad concentric circles: four independent concentric-ring bullseyes arranged
+// across the four quadrants of the board.
+function quadRingCycle(w, h, mod = 0) {
+  const w1 = 2 * Math.floor(w / 4);
+  const w2 = w - w1;
+  const hEven = h - 8 >= Math.max(w1, w2) + 1 ? 8 : 6;
+  const hOdd = h - hEven;
+  const wA = hEven - 2;
+  const wB = w - wA;
+  if (wA >= 4 && wB >= hEven + 1 && w1 >= 4 && hOdd >= Math.max(w1, w2) + 1) {
+    const tl = subRingCycle(w1, hOdd, mod);
+    const tr = offsetCells(subRingCycle(w2, hOdd, -mod), w1, 0);
+    const bl = offsetCells(subRingCycle(wA, hEven, mod), 0, hOdd);
+    const br = offsetCells(subRingCycle(wB, hEven, -mod), wA, hOdd);
+    if (tl && tr && bl && br) {
+      if (mod & 1) tr.reverse();
+      if (mod & 2) bl.reverse();
+      const top = stitchCycles(tl, tr, mod + 1);
+      const bot = stitchCycles(bl, br, mod + 2);
+      const all = stitchCycles(top, bot, mod * 3 + 2);
+      if (all) return all;
+    }
+  }
+  if (w % 2 === 0 && w >= 16) {
+    const cW = [4, 4, 4, 4];
+    let rem = w - 16;
+    let k = 0;
+    while (rem >= 2) {
+      cW[k % 4] += 2;
+      rem -= 2;
+      k++;
+    }
+    if (h >= Math.max(...cW) + 1) {
+      let x = 0;
+      let acc = null;
+      for (let i = 0; i < 4; i++) {
+        const sub = offsetCells(subRingCycle(cW[i], h, i + mod), x, 0);
+        acc = i === 0 ? sub : stitchCycles(acc, sub, i + mod);
+        x += cW[i];
+      }
+      if (acc) return acc;
+    }
+  }
+  return tripleRingCycle(w, h, mod);
 }
 
 // Serpentine cycle: a fallback for shapes the ring construction cannot close.
@@ -165,27 +302,36 @@ function serpentineCells(w, h) {
 // shape every time: rings or serpentine, on either axis, then a symmetry.
 export const FILL_PATTERNS = 32;
 
-// Family = which base route: rings or serpentine, each on either axis.
-function patternCells(w, h, family) {
-  if (family === 0) return ringCycle(w, h);
+// Family = which concentric-circle topology:
+//   0: single full-board concentric bullseye
+//   1: twin side-by-side / figure-8 concentric circles
+//   2: triple concentric circle hubs
+//   3: quad quadrant concentric circle bullseyes
+function patternCells(w, h, family, mod = 0) {
+  if (family === 0) return subRingCycle(w, h, mod, true);
   if (family === 1) {
-    const cells = ringCycle(h, w);
-    return cells && cells.map((c) => ({ x: c.y, y: c.x }));
+    if (!ringCycle(w, h) && !ringCycle(h, w)) return null;
+    return twinRingCycle(w, h, mod);
   }
-  if (family === 2) return serpentineCells(w, h);
-  const cells = serpentineCells(h, w);
-  return cells && cells.map((c) => ({ x: c.y, y: c.x }));
+  if (family === 2) return tripleRingCycle(w, h, mod) || serpentineCells(w, h);
+  return (
+    quadRingCycle(w, h, mod) ||
+    (() => {
+      const cells = serpentineCells(h, w);
+      return cells && cells.map((c) => ({ x: c.y, y: c.x }));
+    })()
+  );
 }
 
 // The order the body grows along, cached per board size and pattern. Bits 0-1
-// pick the family, 2-4 apply a mirror or reverse so the same family still reads
-// differently from round to round.
+// pick the concentric-circle family, 2-4 apply a mirror, reverse, or hub shift
+// so the snake builds varied single and multi-circle formations.
 export function fillOrder(w, h, variant = 0) {
   const v = ((variant % FILL_PATTERNS) + FILL_PATTERNS) % FILL_PATTERNS;
   const ck = `${w}x${h}:${v}`;
   if (cycleCache.has(ck)) return cycleCache.get(ck);
 
-  let cells = patternCells(w, h, v & 3);
+  let cells = patternCells(w, h, v & 3, v >> 2);
   if (!cells) return null;
 
   if (v & 4) cells = cells.map((c) => ({ x: w - 1 - c.x, y: c.y }));
@@ -249,40 +395,72 @@ function jumpKeepsOrder(cycle, body, target, eats) {
   return targetIdx;
 }
 
+let lastLiveVariant = -1;
+
 // Optional `size` is the session board size, so a gifted growth still applies
 // after the round restart. Without it the configured board is used.
 export function createState(rand = Math.random, size = null) {
   const w = (size && size.w) || CONFIG.boardW;
   const h = (size && size.h) || CONFIG.boardH;
-  // A new pattern each round, so the stream does not replay one shape forever.
-  // Rings are the signature look, so they get three rounds in four; the two
-  // serpentine families fill the rest. Bits 0-1 pick the family, 2-4 a mirror or
-  // reverse.
-  const family = rand() < 0.75 ? Math.floor(rand() * 2) : 2 + Math.floor(rand() * 2);
+  // Pick across all four concentric-circle families (single, twin, triple, quad)
+  // with random mirror/reverse bits so every round starts with a fresh layout.
+  const family = Math.floor(rand() * 4);
   let variant = family | (Math.floor(rand() * 8) << 2);
+  if (rand === Math.random && variant === lastLiveVariant) {
+    variant = (variant + 1 + Math.floor(rand() * 7) * 4) & 31;
+  }
   let cycle = fillOrder(w, h, variant);
-  // A grown board may not close the rings, which the base board always does.
-  // Keep the mirror bits and swap in the serpentine family, which needs only one
-  // even side.
+  // A grown board where H !== W + 1 uses the multi-circle families (2 or 3),
+  // which close on every board with at least one even side.
   if (!cycle) {
-    variant = 2 | (variant & 28);
+    variant = (2 + (variant & 1)) | (variant & 28);
     cycle = fillOrder(w, h, variant);
   }
+  if (rand === Math.random) lastLiveVariant = variant;
   const cx = (w - 1) / 2;
   const cy = (h - 1) / 2;
 
-  let headIdx = 0;
-  let best = Infinity;
-  for (let i = 0; i < cycle.n; i++) {
-    const d = Math.abs(cycle.cells[i].x - cx) + Math.abs(cycle.cells[i].y - cy);
-    if (d < best) {
-      best = d;
-      headIdx = i;
+  const n = cycle.n;
+  const candidates = [];
+  for (let i = 0; i < n; i++) {
+    const c0 = cycle.cells[i];
+    const next = cycle.cells[(i + 1) % n];
+    const dir = { x: next.x - c0.x, y: next.y - c0.y };
+    let ok = true;
+    for (let k = 0; k < CONFIG.startLength; k++) {
+      const ck = cycle.cells[(i - k + n * 2) % n];
+      if (ck.x < 2 || ck.x > w - 3 || ck.y < 2 || ck.y > h - 3) {
+        ok = false;
+        break;
+      }
+      if (k >= 1) {
+        const onRayX = (ck.x - c0.x) * dir.x > 0 && ck.y === c0.y;
+        const onRayY = (ck.y - c0.y) * dir.y > 0 && ck.x === c0.x;
+        if (onRayX || onRayY) {
+          ok = false;
+          break;
+        }
+      }
+    }
+    if (ok) candidates.push(i);
+  }
+
+  let headIdx;
+  if (candidates.length > 0) {
+    headIdx = candidates[Math.floor(rand() * candidates.length)];
+  } else {
+    headIdx = 0;
+    let best = Infinity;
+    for (let i = 0; i < cycle.n; i++) {
+      const d = Math.abs(cycle.cells[i].x - cx) + Math.abs(cycle.cells[i].y - cy);
+      if (d < best) {
+        best = d;
+        headIdx = i;
+      }
     }
   }
 
   // Start on the cycle so every later cycle step is collision-free.
-  const n = cycle.n;
   const snake = [];
   for (let i = 0; i < CONFIG.startLength; i++) {
     const c = cycle.cells[(headIdx - i + n * 2) % n];
@@ -290,6 +468,15 @@ export function createState(rand = Math.random, size = null) {
   }
   const next = cycle.cells[(headIdx + 1) % n];
   const dir = { x: next.x - snake[0].x, y: next.y - snake[0].y };
+
+  const chordModes = ['tight', 'deep', 'mixed'];
+  const style = {
+    coilEvery: 3 + Math.floor(rand() * 5),
+    chordMode: chordModes[Math.floor(rand() * chordModes.length)],
+    shortcutGrid: 5 + Math.floor(rand() * 4),
+    straightBias: 0.55 + rand() * 0.35,
+    shiftEvery: 2 + Math.floor(rand() * 3),
+  };
 
   const state = {
     w,
@@ -312,6 +499,10 @@ export function createState(rand = Math.random, size = null) {
     eaten: 0,
     recent: [],
     dramaCooldown: 0,
+    coilSteps: 0,
+    lastShiftEaten: 0,
+    patternShifts: 0,
+    style,
     rand,
   };
   spawnApple(state);
@@ -393,6 +584,13 @@ export function spawnGiftApple(state) {
   if (free.length) return placeApple(state, free[Math.floor(rand() * free.length)]);
   if (state.snake.length <= CONFIG.minLength) return null;
   return placeApple(state, state.snake.pop());
+}
+
+// Any empty cell, or null on a full board.
+export function freeCellFor(state) {
+  const rand = state.rand ?? Math.random;
+  const free = freeCells(state);
+  return free.length ? free[Math.floor(rand() * free.length)] : null;
 }
 
 export function bombAt(state, p) {
@@ -488,6 +686,9 @@ export function step(state) {
   if (apple) {
     state.apples.splice(state.apples.indexOf(apple), 1);
     state.eaten = (state.eaten || 0) + 1;
+    // Grow, but never past the cells the board has: a victory-lap apple tops the
+    // snake back up to a full board instead of pushing it over.
+    if (state.snake.length > state.w * state.h) state.snake.pop();
   } else state.snake.pop();
 
   let removed = [];
@@ -633,8 +834,52 @@ function neighborList(state, blocked, pos, visited) {
   return out;
 }
 
+// BFS to `target` where every step advances monotonically along `cycle` toward
+// `target`. Guarantees that a shortcut never overshoots the item on the cycle
+// and never starts a route whose second step would be rejected as out-of-order.
+function orderedPathTo(state, cycle, body, baseIdx, target, targetDist, rand = Math.random) {
+  if (!body.length || !target) return null;
+  const head = body[0];
+  const blocked = bodySet(body);
+  const goalKey = key(target);
+  const visited = new Set([key(head)]);
+  const queue = [{ p: head, path: [], progress: 0 }];
+
+  while (queue.length) {
+    const cur = queue.shift();
+    if (key(cur.p) === goalKey) return { path: cur.path, target: cur.p };
+    const next = neighborList(state, blocked, cur.p, visited);
+    for (let i = next.length - 1; i > 0; i--) {
+      const j = (rand() * (i + 1)) | 0;
+      [next[i], next[j]] = [next[j], next[i]];
+    }
+    const curDir = cur.path.length ? cur.path[cur.path.length - 1] : state.lastMove;
+    if (curDir && next.length > 1) {
+      const straightIdx = next.findIndex((n) => same(n.d, curDir));
+      if (straightIdx > 0 && rand() < (state.style ? state.style.straightBias : 0.85)) {
+        const [straight] = next.splice(straightIdx, 1);
+        next.unshift(straight);
+      }
+    }
+    for (const n of next) {
+      if (cur.path.length === 0) {
+        if (jumpKeepsOrder(cycle, body, n.c, !!appleAt(state, n.c)) < 0) continue;
+      }
+      const nIdx = cycleIndex(cycle, n.c);
+      if (nIdx < 0) continue;
+      const prog = (nIdx - baseIdx + cycle.n) % cycle.n;
+      if (prog <= cur.progress || prog > targetDist) continue;
+      visited.add(n.k);
+      queue.push({ p: n.c, path: cur.path.concat(n.d), progress: prog });
+    }
+  }
+  return null;
+}
+
 // BFS to the nearest cell in `goals`. The tail cell counts as free because it
-// vacates when the head advances.
+// vacates when the head advances. Prefers continuing in the current movement
+// direction before turning so routes read as smooth human L-turns and arcs
+// instead of jagged stair-steps.
 function shortestPathTo(state, body, goals, rand = Math.random) {
   if (!body.length || !goals.length) return null;
   const head = body[0];
@@ -650,6 +895,14 @@ function shortestPathTo(state, body, goals, rand = Math.random) {
     for (let i = next.length - 1; i > 0; i--) {
       const j = (rand() * (i + 1)) | 0;
       [next[i], next[j]] = [next[j], next[i]];
+    }
+    const curDir = cur.path.length ? cur.path[cur.path.length - 1] : state.lastMove;
+    if (curDir && next.length > 1) {
+      const straightIdx = next.findIndex((n) => same(n.d, curDir));
+      if (straightIdx > 0 && rand() < (state.style ? state.style.straightBias : 0.85)) {
+        const [straight] = next.splice(straightIdx, 1);
+        next.unshift(straight);
+      }
     }
     for (const n of next) {
       visited.add(n.k);
@@ -949,12 +1202,45 @@ function greedySeek(state, body, rand) {
   return best;
 }
 
+// Dynamically shifts to a different concentric-circle variant mid-round when
+// the current body sits cleanly along a shared arc of the new pattern, so the
+// snake transitions between single, twin, triple and quad concentric circles
+// without ever breaking the cycle-ordered invariant.
+function maybeShiftPattern(state, cycle, body, rand) {
+  const eaten = state.eaten || 0;
+  const shiftEvery = (state.style && state.style.shiftEvery) || 3;
+  if (eaten <= 0 || eaten - (state.lastShiftEaten || 0) < shiftEvery) return cycle;
+  if (body.length >= cycle.n * 0.55) return cycle;
+  if (rand() >= 0.65) return cycle;
+
+  const curV = state.variant || 0;
+  const start = (rand() * FILL_PATTERNS) | 0;
+  for (let k = 0; k < FILL_PATTERNS; k++) {
+    const v = (start + k) % FILL_PATTERNS;
+    if (v === curV || (v & 3) === (curV & 3)) continue;
+    const cand = fillOrder(state.w, state.h, v);
+    if (!cand || !cycleOrdered(cand, body)) continue;
+    const hIdx = cycleIndex(cand, body[0]);
+    if (hIdx < 0) continue;
+    const next = cand.cells[(hIdx + 1) % cand.n];
+    if (Math.abs(next.x - body[0].x) + Math.abs(next.y - body[0].y) !== 1) continue;
+    if (!walk(state, body, [{ x: next.x - body[0].x, y: next.y - body[0].y }])) continue;
+    state.variant = v;
+    state.lastShiftEaten = eaten;
+    state.patternShifts = (state.patternShifts || 0) + 1;
+    return cand;
+  }
+  return cycle;
+}
+
 // Cycle-safe planner. Every candidate here provably keeps the body ordered
 // along the Hamiltonian cycle, so none of them can ever trap the snake and the
 // round is guaranteed to fill. Within that safe set the move is chosen by a
-// real BFS route to an apple, which is what makes the snake chase directly
-// instead of walking the cycle.
-function orderedPlanner(state, cycle, body, rand) {
+// smooth BFS route to an apple or a tight concentric-ring chord jump, which is
+// what makes the snake play like a human and coil into multiple concentric
+// circles instead of marching along one fixed track.
+function orderedPlanner(state, baseCycle, body, rand) {
+  const cycle = maybeShiftPattern(state, baseCycle, body, rand);
   const head = body[0];
   const headIdx = cycleIndex(cycle, head);
   let baseIdx = headIdx;
@@ -969,41 +1255,125 @@ function orderedPlanner(state, cycle, body, rand) {
   }
   if (baseIdx < 0) return null;
 
+  let tailIdx = baseIdx;
+  for (let i = body.length - 1; i >= 0; i--) {
+    const idx = cycleIndex(cycle, body[i]);
+    if (idx >= 0) {
+      tailIdx = idx;
+      break;
+    }
+  }
+  const freeSpan = body.length <= 1 ? cycle.n - 1 : (tailIdx - baseIdx - 1 + cycle.n) % cycle.n;
+
   const nextCell = cycle.cells[(baseIdx + 1) % cycle.n];
 
-  // Items first, but only while they are close ahead on the order. Early in a
-  // round the snake cuts across for an apple or a bomb; as the body grows the
-  // window shrinks, so the closing cells are never stranded behind it. Bombs
-  // win ties at the same distance.
-  // Hard targeting: any item inside the window ahead on the order is worth
-  // leaving the line for. The window shrinks with the body so a long snake
-  // stops spending a whole lap on detours near the finish.
-  const reach = Math.max(4, CONFIG.chaseReach - Math.floor(body.length / CONFIG.chaseFalloff));
+  // Items first: any item inside the close window ahead on the order, or any
+  // physically close item across an adjacent concentric ring that can be reached
+  // with a safe forward shortcut without jumping over the tail.
+  const baseReach = Math.max(4, CONFIG.chaseReach - Math.floor(body.length / CONFIG.chaseFalloff));
+  const reserve = Math.min(cycle.n - 4, Math.floor(body.length * 1.15) + CONFIG.safeMargin);
+  const maxReach = Math.max(
+    baseReach,
+    Math.min(Math.max(0, freeSpan - reserve), Math.floor(cycle.n * 0.65))
+  );
   const bombs = state.bombs || [];
+  const allItems = bombs.length ? [...bombs, ...state.apples] : state.apples;
   let target = null;
   let best = Infinity;
-  for (const item of bombs.length ? [...bombs, ...state.apples] : state.apples) {
+  const shortcutGrid = (state.style && state.style.shortcutGrid) || 6;
+  for (const item of allItems) {
     const idx = cycleIndex(cycle, item);
     if (idx < 0) continue;
     const dist = (idx - baseIdx + cycle.n) % cycle.n;
-    if (dist === 0 || dist > reach) continue;
-    const score = dist - (bombs.includes(item) ? 0.5 : 0);
+    if (dist === 0) continue;
+    const gridDist = manhattan(head, item);
+    const inBase = dist <= baseReach;
+    const inShortcut =
+      (state.eaten || 0) > 0 && dist <= maxReach && gridDist <= shortcutGrid && dist >= gridDist * 2;
+    if (!inBase && !inShortcut) continue;
+    const isBomb = bombs.includes(item);
+    const score = (inBase ? dist : gridDist * 2 + dist * 0.1) - (isBomb ? 0.5 : 0);
     if (score < best) {
       best = score;
       target = item;
     }
   }
 
+  // Tight concentric coiling: after tracing a stretch of the current ring, step
+  // inward across rings or close a tighter concentric loop around the hub center
+  // whenever the inner rings have ample room for the snake's current length and
+  // no item is skipped on the outer arc.
+  const coilEvery = (state.style && state.style.coilEvery) || 5;
+  const tryCoilingChord = () => {
+    if (
+      (state.eaten || 0) > 0 &&
+      headIdx >= 0 &&
+      body.length < cycle.n * 0.72 &&
+      (state.coilSteps || 0) >= coilEvery
+    ) {
+      const minLoop = Math.max(body.length + 14, 34);
+      const chords = orderedMoves(state, cycle, body).filter((m) => {
+        if (m.delta < 4 || m.delta > Math.floor(cycle.n * 0.45)) return false;
+        const freeAfter = (tailIdx - m.idx - 1 + cycle.n) % cycle.n;
+        if (freeAfter < minLoop) return false;
+        for (const it of allItems) {
+          const itIdx = cycleIndex(cycle, it);
+          if (itIdx < 0) continue;
+          const dIt = (itIdx - baseIdx + cycle.n) % cycle.n;
+          if (dIt > 0 && dIt < m.delta) return false;
+        }
+        return true;
+      });
+      if (chords.length && rand() < 0.65) {
+        chords.sort((a, b) => a.delta - b.delta);
+        let pick;
+        if (state.style && state.style.chordMode === 'deep') {
+          pick = chords[chords.length - 1];
+        } else if (state.style && state.style.chordMode === 'mixed') {
+          pick = chords[(rand() * chords.length) | 0];
+        } else {
+          pick = chords[0];
+        }
+        const after = walk(state, body, [pick.dir]);
+        if (after && keepsTail(state, after)) {
+          state.coilSteps = 0;
+          remember(state, after[0]);
+          return {
+            dir: { ...pick.dir },
+            kind: 'pattern',
+            closeCall: isCloseCall(state, after),
+            gate: true,
+            routeLen: 0,
+          };
+        }
+      }
+    }
+    return null;
+  };
+
   if (target) {
-    const found = shortestPathTo(state, body, [target], rand);
+    const targetIdx = cycleIndex(cycle, target);
+    const targetDist = (targetIdx - baseIdx + cycle.n) % cycle.n;
+    const found = orderedPathTo(state, cycle, body, baseIdx, target, targetDist, rand);
     if (found && found.path.length) {
-      // The first step must also move forward on the order, or the body stops
-      // being ordered and the planner falls back to the generic one.
-      const first = { x: head.x + found.path[0].x, y: head.y + found.path[0].y };
-      const firstIdx = cycleIndex(cycle, first);
-      const stepDist = firstIdx < 0 ? Infinity : (firstIdx - baseIdx + cycle.n) % cycle.n;
       const after = walk(state, body, found.path);
-      if (stepDist > 0 && stepDist <= reach && after && keepsTail(state, after)) {
+      if (after && keepsTail(state, after)) {
+        if (!same(after[0], nextCell)) {
+          state.coilSteps = 0;
+          remember(state, after[0]);
+          return {
+            dir: { ...found.path[0] },
+            kind: bombs.includes(target) ? 'bomb' : 'apple',
+            closeCall: isCloseCall(state, after),
+            gate: true,
+            routeLen: found.path.length,
+          };
+        }
+        if (targetDist >= 4 && manhattan(head, target) > 1) {
+          const chordMove = tryCoilingChord();
+          if (chordMove) return chordMove;
+        }
+        state.coilSteps = (state.coilSteps || 0) + 1;
         remember(state, after[0]);
         return {
           dir: { ...found.path[0] },
@@ -1016,12 +1386,15 @@ function orderedPlanner(state, cycle, body, rand) {
     }
   }
 
-  // Pattern mode: the next order cell, and nothing else. Leaving the order would
-  // skip a cell, and a skipped cell can only be reclaimed a full lap later.
+  const chordMove = tryCoilingChord();
+  if (chordMove) return chordMove;
+
+  // Pattern mode: advance along the current concentric circle path.
   const stepDir = { x: nextCell.x - head.x, y: nextCell.y - head.y };
   if (Math.abs(stepDir.x) + Math.abs(stepDir.y) === 1) {
     const after = walk(state, body, [stepDir]);
     if (after) {
+      state.coilSteps = (state.coilSteps || 0) + 1;
       remember(state, after[0]);
       return {
         dir: stepDir,

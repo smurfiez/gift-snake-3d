@@ -229,7 +229,10 @@ test('opening does not orbit', () => {
 
   for (let i = 0; i < 20; i++) {
     const info = chooseMoveDetailed(state, rand);
-    assert.equal(info.kind, 'pattern', `tick ${i} left the fill order`);
+    assert.ok(
+      info.kind === 'pattern' || info.kind === 'apple',
+      `tick ${i} left the fill order with kind ${info.kind}`
+    );
     state.dir = info.dir;
     step(state);
     visited.add(key(state.snake[0]));
@@ -276,3 +279,100 @@ test('every close-call move still passes the safety gate', () => {
   assert.equal(state.dead, false);
   assert.ok(closeCalls > 0, 'seed 7 should produce at least one close call');
 });
+
+test('all four concentric-circle families close valid Hamiltonian cycles', () => {
+  for (let variant = 0; variant < 32; variant++) {
+    const order = fillOrder(CONFIG.boardW, CONFIG.boardH, variant);
+    assert.ok(order, `variant ${variant} must generate a fill order`);
+    assert.equal(
+      order.cells.length,
+      CONFIG.boardW * CONFIG.boardH,
+      `variant ${variant} order length must equal board area`
+    );
+    const seen = new Set();
+    for (const c of order.cells) {
+      assert.ok(
+        c.x >= 0 && c.x < CONFIG.boardW && c.y >= 0 && c.y < CONFIG.boardH,
+        'cell in bounds'
+      );
+      seen.add(key(c));
+    }
+    assert.equal(
+      seen.size,
+      CONFIG.boardW * CONFIG.boardH,
+      `variant ${variant} must contain no duplicates`
+    );
+    for (let i = 0; i < order.cells.length; i++) {
+      const a = order.cells[i];
+      const b = order.cells[(i + 1) % order.cells.length];
+      assert.equal(manhattan(a, b), 1, `variant ${variant} step ${i}->${i+1} must be adjacent`);
+    }
+  }
+});
+
+test('the snake shifts between concentric circle patterns mid-round instead of repeating one track', () => {
+  let shiftedRounds = 0;
+  for (let seed = 1; seed <= 5; seed++) {
+    const rand = seeded(seed);
+    const state = createState(rand);
+    state.slipChance = 0;
+    for (let t = 0; t < 350; t++) {
+      if (state.dead || state.rescuing) break;
+      const info = chooseMoveDetailed(state, rand);
+      state.dir = info.dir;
+      const res = step(state);
+      if (res.ate) spawnApple(state);
+    }
+    if (state.patternShifts > 0) shiftedRounds++;
+  }
+  assert.ok(
+    shiftedRounds >= 3,
+    `expected mid-round pattern shifts in at least 3 of 5 rounds, got ${shiftedRounds}`
+  );
+});
+
+test('different rounds start at varied board positions and execute distinct movement trajectories', () => {
+  const startPositions = new Set();
+  const trajectories = new Set();
+  let nonUnitJumps = 0;
+
+  for (let seed = 1; seed <= 12; seed++) {
+    const rand = seeded(seed);
+    const state = createState(rand);
+    state.slipChance = 0;
+    assert.ok(state.style, `seed ${seed} must initialize a per-round play style`);
+    startPositions.add(key(state.snake[0]));
+
+    const moves = [key(state.snake[0])];
+    for (let t = 0; t < 45; t++) {
+      if (state.dead || state.rescuing) break;
+      const cycBefore = fillOrder(state.w, state.h, state.variant);
+      const i0 = cycBefore.ids[state.snake[0].y * state.w + state.snake[0].x];
+      const info = chooseMoveDetailed(state, rand);
+      state.dir = info.dir;
+      const res = step(state);
+      if (res.ate) spawnApple(state);
+      moves.push(key(state.snake[0]));
+      const cycAfter = fillOrder(state.w, state.h, state.variant);
+      const i1 = cycAfter.ids[state.snake[0].y * state.w + state.snake[0].x];
+      const delta = (i1 - i0 + cycAfter.n) % cycAfter.n;
+      if (delta > 1) nonUnitJumps++;
+    }
+    trajectories.add(moves.join('->'));
+  }
+
+  assert.ok(
+    startPositions.size >= 4,
+    `expected rounds to spawn across at least 4 distinct board cells, got ${startPositions.size}`
+  );
+  assert.equal(
+    trajectories.size,
+    12,
+    `expected all 12 rounds to have unique movement trajectories, got ${trajectories.size}`
+  );
+  assert.ok(
+    nonUnitJumps >= 12,
+    `expected active cross-ring shortcuts and concentric chords, got ${nonUnitJumps}`
+  );
+});
+

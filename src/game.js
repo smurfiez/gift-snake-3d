@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG, createState, step, spawnApple, spawnGiftApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateRescue, updateWin } from './logic.js';
+import { CONFIG, createState, step, spawnApple, spawnGiftApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateRescue, updateWin, freeCellFor } from './logic.js';
 
 const $ = (s) => document.querySelector(s);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -82,11 +82,12 @@ function unlockAudio() {
 }
 
 // ---------- sampled SFX ----------
-// Free Mixkit previews, trimmed by playback window; the synth below stays as
-// the fallback whenever a file is missing or cannot be decoded.
+// Free sample previews (see CREDITS.md), trimmed by playback window; the synth
+// below stays as the fallback whenever a file is missing or cannot be decoded.
 const SAMPLES = {
   eat: { src: 'assets/sfx/eat.mp3', gain: 0.55, max: 0.9 },
-  bomb: { src: 'assets/sfx/bomb.mp3', gain: 0.6, max: 1.4 },
+  click: { src: 'assets/sfx/click.mp3', gain: 0.5 },
+  bomb: { src: 'assets/sfx/bomb.mp3', gain: 0.62, max: 0.6 },
   crash: { src: 'assets/sfx/crash.mp3', gain: 0.55, max: 1.1 },
   win: { src: 'assets/sfx/win.mp3', gain: 0.5, max: 3.2 },
 };
@@ -113,18 +114,19 @@ async function loadSamples() {
   }
 }
 
-function playSample(name) {
+function playSample(name, rate = 1) {
   const s = SAMPLES[name];
   const buf = sampleBuf.get(name);
   const c = audio();
   if (!buf || !c || !s) return false;
   const src = c.createBufferSource();
   src.buffer = buf;
+  src.playbackRate.value = rate;
   const gain = c.createGain();
   gain.gain.value = s.gain;
   src.connect(gain).connect(c.destination);
   src.start();
-  if (s.max) src.stop(c.currentTime + s.max);
+  if (s.max) src.stop(c.currentTime + s.max / rate);
   return true;
 }
 
@@ -222,6 +224,9 @@ function keyUp(delay = 0) {
 }
 
 function click() {
+  // Mechanical switch: sampled press + release, pitch-varied per press so a
+  // run of turns never sounds like one looped click.
+  if (playSample('click', rnd(0.94, 1.06))) return;
   keyDown(0);
   keyUp(0.05);
 }
@@ -259,13 +264,12 @@ const sfx = {
     } else if (type === 'widen' || type === 'taller') {
       [0, 1, 2].forEach((i) => tone(330 + i * 220, 0.14, 'triangle', 0.06, i * 0.07));
     }
-    click();
   },
   error() {
     tone(150, 0.16, 'square', 0.07);
   },
   eat() {
-    if (playSample('eat')) return;
+    if (playSample('eat', rnd(0.95, 1.05))) return;
     tone(880, 0.09, 'sine', 0.08);
     tone(1320, 0.1, 'sine', 0.05, 0.05);
   },
@@ -298,12 +302,40 @@ renderer.setSize(bootSize.w, bootSize.h);
 stageEl.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xf7dfe9);
+// Two-stop vertical wash instead of a flat fill: the tilted view leaves a lot
+// of open background, and a gradient gives it depth without stealing focus.
+const bgCanvas = document.createElement('canvas');
+bgCanvas.width = 4;
+bgCanvas.height = 256;
+const bgTex = new THREE.CanvasTexture(bgCanvas);
+bgTex.colorSpace = THREE.SRGBColorSpace;
+scene.background = bgTex;
+const bgCtx = bgCanvas.getContext('2d');
+const bgTop = new THREE.Color();
+const bgBottom = new THREE.Color();
+
+function paintBackdrop(hex) {
+  bgTop.set(hex);
+  bgBottom.copy(bgTop).offsetHSL(0, 0, -0.07);
+  const grad = bgCtx.createLinearGradient(0, 0, 0, bgCanvas.height);
+  grad.addColorStop(0, `#${bgTop.getHexString()}`);
+  grad.addColorStop(1, `#${bgBottom.getHexString()}`);
+  bgCtx.fillStyle = grad;
+  bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
+  bgTex.needsUpdate = true;
+}
+paintBackdrop(0xf7dfe9);
 scene.fog = new THREE.FogExp2(0xf7dfe9, 0.008);
 
 const CAM_FOV = 48;
+// Slight isometric: the camera sits 25° off straight down, on the +Z side, so
+// the board reads as a shallow diamond while rows still run top to bottom.
+const CAM_TILT = THREE.MathUtils.degToRad(25);
+const CAM_DIR = new THREE.Vector3(0, Math.cos(CAM_TILT), Math.sin(CAM_TILT));
+const CAM_RIGHT = new THREE.Vector3(1, 0, 0);
+const CAM_UP = new THREE.Vector3(0, Math.sin(CAM_TILT), -Math.cos(CAM_TILT));
 const camera = new THREE.PerspectiveCamera(CAM_FOV, bootSize.w / bootSize.h, 0.1, 240);
-camera.up.set(0, 0, -1);
+camera.up.set(0, 1, 0);
 
 scene.add(new THREE.AmbientLight(0xfff2df, 0.55));
 const keyLight = new THREE.DirectionalLight(0xfff0e0, 2.4);
@@ -312,6 +344,68 @@ scene.add(keyLight);
 const rimLight = new THREE.DirectionalLight(0xffb3c9, 0.9);
 rimLight.position.set(-10, 7, -9);
 scene.add(rimLight);
+
+// ---------- backdrop ----------
+// The tilted view exposes the floor around the board, so the scene rests on a
+// soft dot field plus a contact shadow instead of an empty colour wash.
+function dotFieldTexture() {
+  const size = 1024;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const g = canvas.getContext('2d');
+  g.fillStyle = '#fff';
+  for (let y = size / 192; y < size; y += size / 96) {
+    for (let x = size / 192; x < size; x += size / 96) {
+      g.beginPath();
+      g.arc(x, y, 1.6, 0, Math.PI * 2);
+      g.fill();
+    }
+  }
+  // Fade the field out at the edges so the plane never shows a hard border.
+  g.globalCompositeOperation = 'destination-in';
+  const fade = g.createRadialGradient(size / 2, size / 2, size * 0.1, size / 2, size / 2, size * 0.5);
+  fade.addColorStop(0, 'rgba(255,255,255,1)');
+  fade.addColorStop(0.6, 'rgba(255,255,255,0.7)');
+  fade.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = fade;
+  g.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.anisotropy = 4;
+  return tex;
+}
+
+const groundMat = new THREE.MeshBasicMaterial({
+  color: 0xffc9db,
+  map: dotFieldTexture(),
+  transparent: true,
+  opacity: 0.16,
+  depthWrite: false,
+});
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(110, 110), groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.set(12, -0.3, 12.5);
+scene.add(ground);
+
+function softShadowTexture() {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const g = canvas.getContext('2d');
+  const grad = g.createRadialGradient(size / 2, size / 2, size * 0.08, size / 2, size / 2, size * 0.5);
+  grad.addColorStop(0, 'rgba(0,0,0,0.6)');
+  grad.addColorStop(0.55, 'rgba(0,0,0,0.32)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
+
+const boardShadow = new THREE.Mesh(
+  new THREE.PlaneGeometry(1, 1),
+  new THREE.MeshBasicMaterial({ map: softShadowTexture(), transparent: true, depthWrite: false })
+);
+boardShadow.rotation.x = -Math.PI / 2;
+scene.add(boardShadow);
 
 // board
 const boardGroup = new THREE.Group();
@@ -490,8 +584,11 @@ function layoutBoard() {
     postTargets[i].pos.set(corners[i].x, ph / 2, corners[i].z);
     postTargets[i].scale.set(pw, ph, pw);
   }
+  boardShadow.position.set(w / 2, -0.04, h / 2);
+  boardShadow.scale.set(w + 4, h + 4, 1);
   snapBoard();
   paintChecker();
+  layoutSpectators();
 }
 
 // snake: one continuous tube swept along the eased visual path
@@ -618,6 +715,7 @@ function rebuildTube(n) {
     else smoothTail.normalize();
     smoothD[count] = span;
     src[count].copy(src[count - 1]).addScaledVector(smoothTail, span - pathLen);
+    clampToBoard(src[count]);
     count++;
     pathLen = span;
   }
@@ -811,6 +909,59 @@ const THEMES = [
     wall: '#e3bd9a', wallEm: '#c99568', post: '#fff6ea', postEm: '#ecd3b8',
     head: '#c99062', accent: '#e3bd9a', rim: '#e8a08a',
   },
+  {
+    name: 'Lavender',
+    css: {
+      cyan: '#9fb4e8', magenta: '#d9a7ff', lime: '#b7d8a8', orange: '#ffb08a',
+      blue: '#9fb4ff', violet: '#c9a7ff', amber: '#f7d08a',
+    },
+    scene: '#efeafb', base: '#4e4266', baseEm: '#5f517a', grid: '#e2d8ff',
+    wall: '#cfc0f5', wallEm: '#a98cf0', post: '#f8f4ff', postEm: '#ded2f8',
+    head: '#a98cf0', accent: '#cfc0f5', rim: '#d9a7ff',
+  },
+  {
+    name: 'Peach',
+    css: {
+      cyan: '#f2b59c', magenta: '#ff9fa8', lime: '#c8d98a', orange: '#ffa070',
+      blue: '#a8bfe8', violet: '#d0a8e0', amber: '#ffc978',
+    },
+    scene: '#fdeee4', base: '#6b4a44', baseEm: '#7d5a52', grid: '#ffd9c4',
+    wall: '#ffbf9f', wallEm: '#ff8f5f', post: '#fff8f0', postEm: '#ffd9bf',
+    head: '#ff9a6a', accent: '#ffd0b8', rim: '#ffb08a',
+  },
+  {
+    name: 'Ocean',
+    css: {
+      cyan: '#5ecbe0', magenta: '#ff9fc4', lime: '#8fd8a8', orange: '#ffb07a',
+      blue: '#6fa8ff', violet: '#a8b8ff', amber: '#ffd27a',
+    },
+    scene: '#e4f3f7', base: '#33505f', baseEm: '#40606f', grid: '#c4eaf2',
+    wall: '#9fdce8', wallEm: '#5fb8d0', post: '#f4fdff', postEm: '#c8eaf2',
+    head: '#3fbfd0', accent: '#9fdce8', rim: '#7fd8e8',
+  },
+  {
+    name: 'Lemon',
+    css: {
+      cyan: '#8fcfa0', magenta: '#ffb0a0', lime: '#ccd95e', orange: '#ffc06a',
+      blue: '#a8c8e8', violet: '#c8b8e0', amber: '#ffd65a',
+    },
+    scene: '#faf7dd', base: '#5f5a34', baseEm: '#6f6a40', grid: '#f0eaa8',
+    wall: '#e8e08a', wallEm: '#c8c05a', post: '#fffdf0', postEm: '#f0eac0',
+    head: '#b8c94a', accent: '#e8e08a', rim: '#d8d070',
+  },
+  {
+    // Dark stream mode: the only palette that also repaints the deck surfaces.
+    name: 'Midnight',
+    dark: true,
+    css: {
+      cyan: '#5ee0d0', magenta: '#ff7fb2', lime: '#a8e07a', orange: '#ffab72',
+      blue: '#8fa8ff', violet: '#c79cff', amber: '#ffd27a',
+    },
+    scene: '#120d16', base: '#2a2233', baseEm: '#332a3e', grid: '#4a3a58',
+    wall: '#3b2f49', wallEm: '#6b4f86', post: '#221a2b', postEm: '#3a2c4a',
+    head: '#6ef0c8', accent: '#35605a', rim: '#b06bff',
+    dots: 0.07,
+  },
 ];
 
 let themeIndex = 0;
@@ -821,13 +972,19 @@ function applyTheme(index) {
   const th = THEMES[themeIndex];
 
   for (const key of Object.keys(th.css)) themeRootStyle.setProperty(`--${key}`, th.css[key]);
+  // Surface overrides live in index.html so the stylesheet stays the source of
+  // truth; the attribute swaps them all at once and light themes drop it.
+  if (th.dark) document.documentElement.setAttribute('data-theme', 'dark');
+  else document.documentElement.removeAttribute('data-theme');
 
-  scene.background.set(th.scene);
+  paintBackdrop(th.scene);
   scene.fog.color.set(th.scene);
 
   baseMat.color.set(th.base);
   baseMat.emissive.set(th.baseEm);
   gridMat.color.set(th.grid);
+  groundMat.color.set(th.wallEm);
+  groundMat.opacity = th.dots ?? 0.16;
 
   wallMat.color.set(th.wall);
   wallMat.emissive.set(th.wallEm);
@@ -846,14 +1003,14 @@ function applyTheme(index) {
 
 // apples
 const appleGeo = new THREE.SphereGeometry(0.3, 16, 12);
-const appleMat = new THREE.MeshStandardMaterial({
+const appleMat = new THREE.MeshToonMaterial({
   color: 0xff2d55,
   emissive: 0xff1744,
-  emissiveIntensity: 1.1,
-  roughness: 0.32,
+  emissiveIntensity: 0.35,
+  gradientMap: toonRamp,
 });
 const stemGeo = new THREE.CylinderGeometry(0.032, 0.032, 0.18, 6);
-const stemMat = new THREE.MeshStandardMaterial({ color: 0x6b3f1d, roughness: 0.9 });
+const stemMat = new THREE.MeshToonMaterial({ color: 0x6b3f1d, gradientMap: toonRamp });
 
 function makeAppleMesh() {
   const group = new THREE.Group();
@@ -868,15 +1025,14 @@ function makeAppleMesh() {
 
 // bombs: dark body, short fuse, warm spark — hazards that stay in the toy palette
 const bombGeo = new THREE.SphereGeometry(0.28, 16, 12);
-const bombMat = new THREE.MeshStandardMaterial({
+const bombMat = new THREE.MeshToonMaterial({
   color: 0x3a2436,
   emissive: 0x1c0f1a,
-  emissiveIntensity: 0.5,
-  roughness: 0.42,
-  metalness: 0.25,
+  emissiveIntensity: 0.25,
+  gradientMap: toonRamp,
 });
 const fuseGeo = new THREE.CylinderGeometry(0.028, 0.028, 0.2, 6);
-const fuseMat = new THREE.MeshStandardMaterial({ color: 0x8a6a4a, roughness: 0.9 });
+const fuseMat = new THREE.MeshToonMaterial({ color: 0x8a6a4a, gradientMap: toonRamp });
 const sparkGeo = new THREE.SphereGeometry(0.085, 10, 8);
 const sparkMat = new THREE.MeshBasicMaterial({
   color: 0xffc14d, blending: THREE.AdditiveBlending, depthWrite: false,
@@ -904,7 +1060,6 @@ const dropActors = [];
 const appleBatches = new Map();
 const APPLE_BATCH_MS = 450;
 let lastViewer = null;
-let lastVariant = '';
 
 const birdBodyMat = new THREE.MeshStandardMaterial({
   color: 0x8ff4ff, emissive: 0x1e9dff, emissiveIntensity: 1.1, roughness: 0.35, metalness: 0.3,
@@ -1052,6 +1207,7 @@ function flyBombToMouth(cell) {
       mesh.scale.setScalar(1 - p * 0.3);
       if (p < 1) return false;
       const cut = eatBomb(state, { x: head.x, y: head.y });
+      sfx.explode();
       burst(to, BURST.bomb, { count: 22, power: 1.5 });
       bombDebris(cut);
       shakeMag = Math.max(shakeMag, 0.45);
@@ -1064,15 +1220,16 @@ function flyBombToMouth(cell) {
 
 function landBomb(cell) {
   if (state.dead || state.won) return;
-  // No free cell or already at the bomb cap: the bomb still counts, it just
-  // lands on the snake and detonates instead of sitting on the board.
+  // Prefer the board over the snake: a bomb aimed at a body cell moves to a free
+  // cell while one exists. Only a board with nowhere left sends it into the mouth.
   const onSnake = state.snake.some((s) => s.x === cell.x && s.y === cell.y);
-  if (!onSnake && spawnBombAt(state, cell)) {
+  const spot = onSnake ? freeCellFor(state) : cell;
+  if (spot && spawnBombAt(state, spot)) {
     refreshHud();
     camPunch += 0.15;
     return;
   }
-  flyBombToMouth(cell);
+  flyBombToMouth(spot || cell);
 }
 
 function birdDrop(apples) {
@@ -1278,12 +1435,353 @@ function meteorDrop(items, kind) {
   };
 }
 
-// Bombs get their own variants: no bird fly-by, because a bird carrying a bomb
-// reads as an accident rather than a gift.
-const APPLE_VARIANTS = ['bird', 'parachute', 'ufo', 'meteor'];
-const BOMB_VARIANTS = ['parachute', 'ufo', 'meteor'];
+// ---------- thrower figures ----------
+// Spectators stand outside the wall and lob the gift in: pop in, wind up,
+// release, arc, landing. One figure per item, so a spam batch reads as a crowd.
+const FIG_COLORS = [0xffd166, 0x9dff3d, 0x8ff4ff, 0xff9ec7, 0xc7a6ff, 0xffb37a];
+const figBodyGeo = new THREE.CapsuleGeometry(0.18, 0.3, 5, 10);
+const figHeadGeo = new THREE.SphereGeometry(0.17, 12, 10);
+const figLimbGeo = new THREE.CapsuleGeometry(0.055, 0.2, 4, 8);
+const figEyeGeo = new THREE.SphereGeometry(0.032, 6, 5);
+const figEyeMat = new THREE.MeshBasicMaterial({ color: 0x2a1f2c });const figHeadMat = new THREE.MeshToonMaterial({ color: 0xffe8d6, gradientMap: toonRamp });
 
-function startDrop(items, variant, kind = 'apple') {
+function makeThrower() {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshToonMaterial({ color: pick(FIG_COLORS), gradientMap: toonRamp });
+  const body = new THREE.Mesh(figBodyGeo, mat);
+  body.position.y = 0.62;
+  g.add(body);
+  const head = new THREE.Mesh(figHeadGeo, figHeadMat);
+  head.position.y = 1.08;
+  g.add(head);
+  for (const s of [-1, 1]) {
+    const eye = new THREE.Mesh(figEyeGeo, figEyeMat);
+    eye.position.set(s * 0.065, 1.11, 0.15);
+    g.add(eye);
+    const leg = new THREE.Mesh(figLimbGeo, mat);
+    leg.position.set(s * 0.09, 0.2, 0);
+    g.add(leg);
+  }
+  const arms = [-1, 1].map((s) => {
+    const pivot = new THREE.Group();
+    pivot.position.set(s * 0.2, 0.8, 0);
+    const limb = new THREE.Mesh(figLimbGeo, mat);
+    limb.position.y = -0.16;
+    pivot.add(limb);
+    g.add(pivot);
+    return pivot;
+  });
+  g.userData.arm = arms[1];
+  g.userData.body = body;
+  return g;
+}
+
+// ---------- spectator crowd ----------
+// The crowd lives outside the wall for the whole round: it bobs, sways and
+// watches the snake. Each gift goes to the nearest free spectator, who shows
+// the gifter's avatar and lobs the item in.
+const RIM_GAP = 1.15;
+const spectators = [];
+const avatarCache = new Map();
+const bubbleCache = new Map();
+const CHATTER = [
+  'nice!', 'go go go', 'apple!!', 'bomb?', 'ooh', 'lol', 'watch tail',
+  'hot!', 'again', 'wow', 'my apple', 'come on', 'look up', 'gg',
+];
+
+function bubbleTexture(text) {
+  let tex = bubbleCache.get(text);
+  if (tex) return tex;
+  const c = document.createElement('canvas');
+  c.width = 256;
+  c.height = 128;
+  const g = c.getContext('2d');
+  const r = 26;
+  g.fillStyle = 'rgba(255, 252, 250, 0.97)';
+  g.strokeStyle = 'rgba(94, 56, 80, 0.2)';
+  g.lineWidth = 5;
+  g.beginPath();
+  g.moveTo(8 + r, 6);
+  g.arcTo(248, 6, 248, 96, r);
+  g.arcTo(248, 96, 8, 96, r);
+  g.arcTo(8, 96, 8, 6, r);
+  g.arcTo(8, 6, 248, 6, r);
+  g.closePath();
+  g.fill();
+  g.stroke();
+  g.beginPath();
+  g.moveTo(112, 94);
+  g.lineTo(146, 94);
+  g.lineTo(128, 124);
+  g.closePath();
+  g.fill();
+  g.fillStyle = '#5e3850';
+  g.font = 'bold 36px "Trebuchet MS", sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(text, 128, 52, 212);
+  tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  bubbleCache.set(text, tex);
+  return tex;
+}
+
+function avatarTexture(name) {
+  let tex = avatarCache.get(name);
+  if (tex) return tex;
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  let hue = 0;
+  for (let i = 0; i < name.length; i++) hue = (hue * 31 + name.charCodeAt(i)) % 360;
+  g.fillStyle = `hsl(${hue} 76% 68%)`;
+  g.beginPath();
+  g.arc(64, 64, 58, 0, TAU);
+  g.fill();
+  g.lineWidth = 8;
+  g.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+  g.stroke();
+  g.fillStyle = '#fff';
+  g.font = 'bold 62px "Trebuchet MS", sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillText(name[0].toUpperCase(), 64, 68);
+  tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  avatarCache.set(name, tex);
+  return tex;
+}
+
+function makeSpectator() {
+  const fig = makeThrower();
+  const pic = new THREE.Sprite(new THREE.SpriteMaterial({
+    transparent: true, depthWrite: false,
+  }));
+  pic.scale.set(0.66, 0.66, 1);
+  pic.position.y = 1.78;
+  pic.visible = false;
+  fig.add(pic);
+  const bubble = new THREE.Sprite(new THREE.SpriteMaterial({
+    transparent: true, depthWrite: false,
+  }));
+  bubble.scale.set(1.5, 0.75, 1);
+  bubble.position.y = 2.34;
+  bubble.visible = false;
+  fig.add(bubble);
+  scene.add(fig);
+  return {
+    fig, pic, bubble, arm: fig.userData.arm,
+    home: { x: 0, z: 0 }, baseYaw: 0, seed: rnd(0, TAU),
+    job: null, avatarT: 0, bubbleT: 0, chatT: rnd(4, 9),
+    turn: 0, reply: null,
+  };
+}
+
+// Five posts along the front wall, the edge the camera sees below the board.
+function layoutSpectators() {
+  if (!spectators.length) for (let i = 0; i < 5; i++) spectators.push(makeSpectator());
+  const { w, h } = state;
+  const spots = [0.85, w * 0.3, w * 0.5, w * 0.7, w - 0.85];
+  for (let i = 0; i < spectators.length; i++) {
+    const s = spectators[i];
+    s.home.x = spots[i % spots.length];
+    s.home.z = h + RIM_GAP;
+    s.fig.position.set(s.home.x, 0, s.home.z);
+    s.fig.lookAt(w / 2, 0, h / 2);
+    s.baseYaw = s.fig.rotation.y;
+  }
+  for (const s of spectators) clearSpectator(s);
+}
+
+function clearSpectator(s) {
+  if (s.job && s.job.proj) scene.remove(s.job.proj);
+  s.job = null;
+  s.arm.rotation.x = 0;
+  s.fig.rotation.x = 0;
+  s.pic.visible = false;
+  s.avatarT = 0;
+  s.bubble.visible = false;
+  s.bubbleT = 0;
+  s.turn = 0;
+  s.reply = null;
+  s.chatT = rnd(3, 8);
+}
+
+function nearestFreeSpectator(cell) {
+  let best = null;
+  let bd = Infinity;
+  for (const s of spectators) {
+    if (s.job) continue;
+    const d = Math.hypot(s.home.x - (cell.x + 0.5), s.home.z - (cell.y + 0.5));
+    if (d < bd) { bd = d; best = s; }
+  }
+  return best;
+}
+
+function showAvatar(s, viewer) {
+  if (!viewer) return;
+  s.pic.material.map = avatarTexture(viewer);
+  s.pic.material.opacity = 1;
+  s.pic.material.needsUpdate = true;
+  s.pic.visible = true;
+  s.avatarT = 2.3;
+}
+
+function say(s, text, turn = 0) {
+  s.bubble.material.map = bubbleTexture(text);
+  s.bubble.material.opacity = 1;
+  s.bubble.material.needsUpdate = true;
+  s.bubble.visible = true;
+  s.bubbleT = 1.9;
+  s.turn = turn;
+}
+
+function neighbourOf(s) {
+  let best = null;
+  let bd = Infinity;
+  for (const o of spectators) {
+    if (o === s) continue;
+    const d = Math.abs(o.home.x - s.home.x);
+    if (d < bd) { bd = d; best = o; }
+  }
+  return best;
+}
+
+// One throw job per gifted item. Items from the same gift arrive in a stagger so
+// a batch reads as the crowd taking turns rather than one figure doing double
+// duty.
+function throwWithSpectators(items, kind, viewer) {
+  items.forEach((cell, i) => {
+    const s = nearestFreeSpectator(cell);
+    if (!s) {
+      // Every spectator is mid-throw: the item still lands, just without a hand.
+      landDrop(kind, cell);
+      return;
+    }
+    s.job = {
+      cell, kind, delay: i * 0.24, t: 0, threw: false, projT: 0, restT: 0,
+      start: new THREE.Vector3(),
+      target: new THREE.Vector3(cell.x + 0.5, 0.4, cell.y + 0.5),
+    };
+    showAvatar(s, viewer);
+    s.bubble.visible = false;
+    s.bubbleT = 0;
+    s.turn = 0;
+    s.reply = null;
+  });
+}
+
+const throwFwd = new THREE.Vector3();
+
+function updateSpectators(dt) {
+  for (const s of spectators) {
+    s.fig.position.y = Math.sin(clock * 2.1 + s.seed) * 0.035;
+    s.fig.rotation.y = s.baseYaw + Math.sin(clock * 0.9 + s.seed) * 0.07 + s.turn;
+
+    if (s.avatarT > 0) {
+      s.avatarT -= dt;
+      s.pic.material.opacity = Math.min(1, s.avatarT / 0.35);
+      if (s.avatarT <= 0) s.pic.visible = false;
+    }
+
+    const j = s.job;
+    if (!j) {
+      s.fig.position.x = s.home.x + Math.sin(clock * 0.45 + s.seed) * 0.1;
+
+      if (s.bubbleT > 0) {
+        s.bubbleT -= dt;
+        s.bubble.material.opacity = Math.min(1, s.bubbleT / 0.4);
+        if (s.bubbleT <= 0) {
+          s.bubble.visible = false;
+          s.turn = 0;
+        }
+      }
+
+      // Talking figures wave; idle ones just sway.
+      s.arm.rotation.x = s.bubbleT > 0
+        ? -2.25 + Math.sin(clock * 9 + s.seed) * 0.3
+        : Math.sin(clock * 1.6 + s.seed) * 0.05;
+
+      if (s.reply) {
+        s.reply.t -= dt;
+        if (s.reply.t <= 0) {
+          say(s, s.reply.text, s.reply.turn);
+          s.reply = null;
+          s.chatT = Math.max(s.chatT, 3);
+        }
+      } else if (s.chatT > 0) {
+        s.chatT -= dt;
+      } else {
+        const mate = neighbourOf(s);
+        const turn = mate ? Math.sign(mate.home.x - s.home.x) * 0.45 : 0;
+        say(s, pick(CHATTER), turn);
+        s.chatT = rnd(5, 11);
+        // Half the time the neighbour answers, which is what makes the row alive.
+        if (mate && Math.random() < 0.55 && !mate.job && mate.bubbleT <= 0) {
+          mate.reply = { text: pick(CHATTER), t: rnd(0.55, 1.3), turn: -turn };
+        }
+      }
+      continue;
+    }
+
+    j.t += dt;
+    if (j.t < j.delay) continue;
+    const t = j.t - j.delay;
+
+    // Wind up: the throwing arm swings back while the figure leans.
+    if (!j.threw && t < 0.34) {
+      const w = t / 0.34;
+      s.arm.rotation.x = w * w * 1.9;
+      s.fig.rotation.x = -0.1 * w;
+      continue;
+    }
+
+    // Release: hand forward, projectile leaves the hand on an arc.
+    if (!j.threw) {
+      j.threw = true;
+      s.arm.rotation.x = -0.9;
+      s.fig.rotation.x = 0.08;
+      s.fig.updateMatrixWorld();
+      throwFwd.set(0, 0, 1).applyQuaternion(s.fig.quaternion);
+      j.start.copy(s.fig.position).addScaledVector(throwFwd, 0.42);
+      j.start.y += 1.02;
+      const m = j.kind === 'bomb' ? makeBombMesh() : makeAppleMesh();
+      m.scale.setScalar(0.9);
+      m.position.copy(j.start);
+      scene.add(m);
+      j.proj = m;
+    }
+
+    if (j.proj) {
+      j.projT += dt;
+      const p = Math.min(1, j.projT / 0.5);
+      j.proj.position.lerpVectors(j.start, j.target, p);
+      j.proj.position.y += Math.sin(p * Math.PI) * 1.5;
+      j.proj.rotation.z += dt * 9;
+      if (p >= 1) {
+        scene.remove(j.proj);
+        j.proj = null;
+        landDrop(j.kind, j.cell);
+        burst(j.target, dropBurst(j.kind), { count: 8, power: 1.3 });
+      }
+      continue;
+    }
+
+    // Settle: the arm drops back to the loiter pose before the next gift.
+    j.restT += dt;
+    s.arm.rotation.x *= Math.max(0, 1 - dt * 8);
+    s.fig.rotation.x *= Math.max(0, 1 - dt * 8);
+    if (j.restT > 0.55) s.job = null;
+  }
+}
+
+// Every apple and bomb gift is now a crowd throw; the older flying deliveries
+// stay in the file as spares and can be requested by name from `startDrop`.
+function startDrop(items, variant, kind = 'apple', viewer = null) {
+  if (variant === 'thrower') {
+    throwWithSpectators(items, kind, viewer);
+    return;
+  }
   const act =
     variant === 'parachute' ? parachuteDrop(items, kind) :
     variant === 'ufo' ? ufoDrop(items, kind) :
@@ -1292,15 +1790,10 @@ function startDrop(items, variant, kind = 'apple') {
   dropActors.push(act);
 }
 
-function nextDropVariant(kind = 'apple') {
-  const list = kind === 'bomb' ? BOMB_VARIANTS : APPLE_VARIANTS;
-  let v = pick(list);
-  if (v === lastVariant) {
-    const i = (list.indexOf(v) + 1 + ((Math.random() * (list.length - 1)) | 0)) % list.length;
-    v = list[i];
-  }
-  lastVariant = v;
-  return v;
+// Every apple and bomb gift is now a crowd throw; the older flying deliveries
+// stay in the file as spares and can be re-enabled from here.
+function nextDropVariant() {
+  return 'thrower';
 }
 
 function queueAppleGift() {
@@ -1337,7 +1830,7 @@ function flushAppleBatch(viewer) {
     return;
   }
 
-  startDrop(apples, nextDropVariant());
+  startDrop(apples, nextDropVariant(), 'apple', viewer);
   sfx.gift('apple');
   camPunch += 0.5;
   flash('#9dff3d');
@@ -1559,6 +2052,35 @@ let roundCounted = false;
 let victoryLap = true;
 let debugSpeed = 1;
 let simGifts = false;
+
+// Debug toggles survive a reload; sound already persists on its own key.
+const DEBUG_KEY = 'giftsnake.debug';
+const debugPrefs = (() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DEBUG_KEY) || 'null') || {};
+    return {
+      winLap: raw.winLap !== false,
+      gifts: !!raw.gifts,
+      speed: Number(raw.speed) || 1,
+    };
+  } catch (e) {
+    return { winLap: true, gifts: false, speed: 1 };
+  }
+})();
+victoryLap = debugPrefs.winLap;
+simGifts = debugPrefs.gifts;
+debugSpeed = Math.max(1, debugPrefs.speed);
+
+function saveDebug() {
+  try {
+    localStorage.setItem(
+      DEBUG_KEY,
+      JSON.stringify({ winLap: victoryLap, gifts: simGifts, speed: debugSpeed })
+    );
+  } catch (e) {
+    // Private-mode storage failures must not break the stream.
+  }
+}
 let giftClock = 0;
 let cdKey = '';
 let clock = 0;
@@ -1567,7 +2089,6 @@ let shakeMag = 0;
 const winFx = Array.from({ length: 8 }, () => ({ at: 0, x: 0, y: 0, z: 0, color: 0x9dff3d, active: false }));
 const WIN_COLORS = [0x9dff3d, 0x39f6ff, 0xff3ea5, 0xffc14d];
 
-const CAM_DIR = new THREE.Vector3(0, 1, 0);
 const camBase = new THREE.Vector3();
 const camLook = new THREE.Vector3();
 const camTarget = new THREE.Vector3();
@@ -1577,19 +2098,41 @@ let camPunch = 0;
 let fovKick = 0;
 let nearMissAt = -9;
 
-// Top-down framing: fit the whole board inside the stage on the tight axis.
-// +1.5 cells margin absorbs wall height and the transient speed FOV punch.
+// Framing sits on the width: the walled board spans the screen edge to edge, so
+// the rim crowd below it stays in frame on a vertical stream layout.
 function fitDistance() {
-  const span = Math.max(state.w, state.h) + 1.5;
-  const halfFov = THREE.MathUtils.degToRad(CAM_FOV) / 2;
-  const dV = (span / 2) / Math.tan(halfFov);
-  const dH = (span / 2) / (Math.tan(halfFov) * Math.max(0.35, camera.aspect));
-  return Math.max(dV, dH);
+  const halfV = THREE.MathUtils.degToRad(CAM_FOV) / 2;
+  const halfH = Math.atan(Math.tan(halfV) * camera.aspect);
+  const tanH = Math.tan(halfH);
+  const cx = state.w / 2;
+  const cz = state.h / 2;
+  let d = 0;
+  for (const x of [0, state.w]) {
+    for (const z of [0, state.h]) {
+      for (const y of [0, 1.2]) {
+        const rx = x - cx;
+        const rz = z - cz;
+        const along = rx * CAM_DIR.x + y * CAM_DIR.y + rz * CAM_DIR.z;
+        const right = Math.abs(rx * CAM_RIGHT.x + rz * CAM_RIGHT.z);
+        d = Math.max(d, right / tanH + along);
+      }
+    }
+  }
+  return d * 1.02 + 0.4;
 }
 
 const SNAKE_Y = 0.45;
 function setWorld(p, out) {
   return out.set(p.x + 0.5, SNAKE_Y, p.y + 0.5);
+}
+
+// Rendering-only clamp: the trail can carry an extrapolated tail cell, and the
+// tube payback can extend a tail past a wall. Keeping the centreline at least
+// half a cell inside keeps the 0.45 radius tube off the wall.
+function clampToBoard(p) {
+  p.x = Math.min(state.w - 0.5, Math.max(0.5, p.x));
+  p.z = Math.min(state.h - 0.5, Math.max(0.5, p.z));
+  return p;
 }
 
 function resetTrail() {
@@ -1627,18 +2170,21 @@ function sampleTrail(d, out) {
   const max = trail.length - 1;
   if (max <= 0) {
     const c = trail[0] || state.snake[0];
-    return out.set(c.x + 0.5, SNAKE_Y, c.y + 0.5);
+    out.set(c.x + 0.5, SNAKE_Y, c.y + 0.5);
+    return clampToBoard(out);
   }
   const at = Math.max(0, Math.min(max, d));
   if (at === max) {
     const c = trail[max];
-    return out.set(c.x + 0.5, SNAKE_Y, c.y + 0.5);
+    out.set(c.x + 0.5, SNAKE_Y, c.y + 0.5);
+    return clampToBoard(out);
   }
   const i = Math.floor(at);
   const f = at - i;
   const a = trail[i];
   const b = trail[i + 1];
-  return out.set(a.x + (b.x - a.x) * f + 0.5, SNAKE_Y, a.y + (b.y - a.y) * f + 0.5);
+  out.set(a.x + (b.x - a.x) * f + 0.5, SNAKE_Y, a.y + (b.y - a.y) * f + 0.5);
+  return clampToBoard(out);
 }
 
 function syncSnake(dt) {
@@ -1653,7 +2199,10 @@ function syncSnake(dt) {
   // Logical ticks jump one cell; visualP slides the body along the trail
   // between them so spacing stays exactly one cell through corners.
   if (!state.dead && !state.won && !state.rescuing) {
-    visualP = Math.min(1, visualP + (dt * 1000 * debugSpeed) / state.tickMs);
+    // Track the tick accumulator instead of adding a per-frame fraction: with
+    // several logic ticks in one frame (debug 5×+) the fraction capped at 1 and
+    // the visual trail fell further and further behind the body.
+    visualP = Math.min(1, acc / state.tickMs);
   }
   const back = 1 - visualP;
   for (let i = 0; i < n; i++) sampleTrail(back + i, visual[i]);
@@ -1801,7 +2350,9 @@ function updateCamera(dt) {
   shakeMag *= Math.exp(-dt * 6);
   const sx = (Math.random() - 0.5) * shakeMag;
   const sy = (Math.random() - 0.5) * shakeMag;
-  camera.position.set(camBase.x + sx, camBase.y + sy, camBase.z + sx * 0.6);
+  // Offset along the screen basis; world-axis shake reads as a diagonal wobble
+  // once the camera is tilted.
+  camera.position.copy(camBase).addScaledVector(CAM_RIGHT, sx).addScaledVector(CAM_UP, sy);
   camera.lookAt(camLook);
 
   fovKick *= Math.exp(-dt * 6);
@@ -1921,7 +2472,7 @@ function countGift(viewer, type, n = 1) {
   roundGifts.set(viewer, r);
 }
 
-function renderWinSummary() {
+function renderGiftSummary() {
   const top = (type) =>
     [...roundGifts.entries()]
       .map(([v, c]) => ({ v, n: c[type] }))
@@ -2011,14 +2562,13 @@ function sendGift(type) {
   }
   if (state.rescuing && type !== 'bomb') {
     sfx.error();
-    toast('💣 Rescue window — bombs only', 'bad');
+    toast('💣 Rescue: send a bomb to free the snake', 'bad');
     return;
   }
   const gift = GIFTS[type];
   if (!gift) return;
 
   if (type === 'apple') {
-    click();
     queueAppleGift();
     return;
   }
@@ -2038,7 +2588,7 @@ function sendGift(type) {
     boardSize.w = ev.w;
     boardSize.h = ev.h;
     sfx.gift(type);
-    reset();
+    reset(true);
     logGift(type, viewer);
     toast(`${gift.icon} <b>@${viewer}</b> grew the map to ${ev.w} × ${ev.h}`, 'good');
     return;
@@ -2070,7 +2620,7 @@ function sendGift(type) {
       toast(`💣 <b>@${viewer} freed the snake</b>`, 'good');
       logGift(type, viewer, ev.removed.length);
     } else {
-      startDrop([ev.cell], nextDropVariant('bomb'), 'bomb');
+      startDrop([ev.cell], nextDropVariant(), 'bomb', viewer);
       camPunch += 0.5;
       shakeMag = Math.max(shakeMag, 0.25);
       flash('#ff8a3d', '33');
@@ -2120,7 +2670,13 @@ function onRescue() {
     burst(tmpVec, BURST.crash);
   }
   flash('#ffc14d');
-  showBanner('TAIL HIT', `bombs cut the tail · ${Math.ceil(state.rescueMs / 1000)}s`, 'bad');
+  showBanner('TAIL HIT', rescueText(), 'bad');
+}
+
+// Rescue banner text, rewritten every frame so the seconds count down.
+function rescueText() {
+  const left = Math.ceil(state.rescueMs / 1000);
+  return `💣 send a bomb to free the snake · ${left}s left`;
 }
 
 function onDeath() {
@@ -2137,9 +2693,10 @@ function onDeath() {
   flash('#ff2d55');
   showBanner(
     'SNAKE CRASHED',
-    `restarting · ${record.wins}W ${record.losses}L`,
+    `${record.wins}W ${record.losses}L`,
     'bad',
   );
+  renderGiftSummary();
 }
 
 function onWin() {
@@ -2156,7 +2713,7 @@ function onWin() {
     f.color = pick(WIN_COLORS);
     f.active = true;
   }
-  renderWinSummary();
+  renderGiftSummary();
   showBanner('STREAMER WINS', `board filled · ${record.wins}W ${record.losses}L`, 'good');
 }
 
@@ -2172,7 +2729,13 @@ function updateWinFx() {
   }
 }
 
-function reset() {
+function reset(keepGrowth = false) {
+  // Widen / taller only lasts for the round they were gifted in; the next round
+  // returns to the configured board.
+  if (!keepGrowth) {
+    boardSize.w = CONFIG.boardW;
+    boardSize.h = CONFIG.boardH;
+  }
   state = createState(undefined, boardSize);
   trail.length = 0;
   resetTrail();
@@ -2192,7 +2755,6 @@ function reset() {
   fovKick = 0;
   shakeMag = 0;
   lastViewer = null;
-  lastVariant = '';
   for (const b of appleBatches.values()) clearTimeout(b.timer);
   appleBatches.clear();
   for (const act of dropActors) scene.remove(act.group);
@@ -2249,7 +2811,7 @@ function frame(ms) {
   if (state.rescuing) {
     const r = updateRescue(state, dt * 1000);
     if (hud.banner.classList.contains('show')) {
-      hud.bannerSub.textContent = `bombs cut the tail · ${Math.ceil(state.rescueMs / 1000)}s`;
+      hud.bannerSub.textContent = rescueText();
     }
     if (r.died) onDeath();
   }
@@ -2278,6 +2840,8 @@ function frame(ms) {
       acc -= state.tickMs;
 
       const info = chooseMoveDetailed(state);
+      // A mechanical key click on every real turn, silent while going straight.
+      if (info.dir.x !== state.dir.x || info.dir.y !== state.dir.y) click();
       state.dir = info.dir;
       // Near-miss is presentation only: a small punch and a dim flash, rate-limited
       // so a tight corridor does not strobe.
@@ -2325,15 +2889,14 @@ function frame(ms) {
       if (state.apples.length < CONFIG.maxApples) spawnApple(state);
     }
   } else if (state.dead) {
-    const left = Math.max(0, Math.ceil(CONFIG.restartMs / 1000 - (clock - deadAt)));
-    if (hud.banner.classList.contains('show')) {
-      hud.bannerSub.textContent = `restarting in ${left}s · R`;
-    }
+    const left = Math.max(1, Math.ceil(CONFIG.restartMs / 1000 - (clock - deadAt)));
+    showCountdown(left, 'NEXT ROUND', true);
     if (clock - deadAt > CONFIG.restartMs / 1000) reset();
   }
 
   updateWinFx();
   updateDropActors(dt);
+  updateSpectators(dt);
   syncSnake(dt);
   syncApples(dt);
   syncBombs(dt);
@@ -2372,6 +2935,7 @@ window.addEventListener('pointerdown', unlockAudio, { once: true });
 hud.winLap.addEventListener('change', () => {
   victoryLap = hud.winLap.checked;
   applyDebug();
+  saveDebug();
 });
 
 hud.dbgSound.addEventListener('change', () => {
@@ -2386,22 +2950,22 @@ hud.dbgSound.addEventListener('change', () => {
 hud.dbgGifts.addEventListener('change', () => {
   simGifts = hud.dbgGifts.checked;
   giftClock = 0;
+  saveDebug();
 });
 
 hud.dbgSpeed.addEventListener('change', () => {
   debugSpeed = Math.max(1, Number(hud.dbgSpeed.value) || 1);
+  saveDebug();
 });
 
 $('#restart').addEventListener('click', () => {
   unlockAudio();
-  click();
   reset();
 });
 
 if (hud.theme) {
   hud.theme.addEventListener('click', () => {
     unlockAudio();
-    click();
     applyTheme(themeIndex + 1);
   });
 }
@@ -2424,6 +2988,9 @@ refreshHud();
 renderLeaderboard();
 refreshRecord();
 hud.dbgSound.checked = soundOn;
+hud.winLap.checked = victoryLap;
+hud.dbgGifts.checked = simGifts;
+hud.dbgSpeed.value = String(debugSpeed);
 applyDebug();
 hideParticles();
 syncSnake(0);
