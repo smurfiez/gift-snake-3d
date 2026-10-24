@@ -37,7 +37,6 @@
         --disc-bg: radial-gradient(circle at 50% 32%, #fffdfa 0%, #fdeef4 58%, #f6dde8 100%);
         --disc-ring: rgba(255, 255, 255, 0.9);
         --disc-ring-soft: rgba(255, 255, 255, 0.5);
-        --brand-glow: rgba(255, 255, 255, 0.7);
         --focus: #cf4f82;
         --body-bg: radial-gradient(ellipse at 50% 30%, #f3e2ec, #dfc8d8 70%);
         --mono: "Nunito", "Quicksand", ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", system-ui, sans-serif;
@@ -85,7 +84,6 @@
         --disc-bg: radial-gradient(circle at 50% 32%, #2f2538 0%, #221a29 58%, #180f1f 100%);
         --disc-ring: rgba(255, 255, 255, 0.2);
         --disc-ring-soft: rgba(255, 255, 255, 0.08);
-        --brand-glow: rgba(0, 0, 0, 0.55);
         --focus: #ff7fb2;
       }
 
@@ -156,53 +154,56 @@
         pointer-events: none;
       }
 
-      .brand {
-        font-size: clamp(16px, 2.3cqw, 30px);
-        font-weight: 900; letter-spacing: 0.01em; color: var(--text);
+      /* Session stats card. It owns the top-left slot, so the debug panel moved
+         to the top-right corner below. */
+      .stats {
+        display: flex; flex-direction: column; gap: clamp(2px, 0.35cqh, 5px);
+        width: clamp(120px, 17cqw, 210px);
+        padding: clamp(7px, 0.9cqh, 12px) clamp(9px, 0.9cqw, 14px);
+        border: 1px solid var(--line);
+        border-radius: clamp(10px, 1.2cqh, 16px);
+        background: var(--surface-faint);
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
+        box-shadow: 0 14px 30px -22px rgba(94, 56, 80, 0.45);
       }
-      .brand span { color: var(--magenta); text-shadow: 0 2px 0 var(--brand-glow); }
-      .live {
-        display: flex; align-items: center; gap: clamp(5px, 0.6cqw, 9px);
-        padding: clamp(4px, 0.6cqh, 8px) clamp(9px, 1cqw, 15px) clamp(3px, 0.5cqh, 7px);
-        font-size: clamp(9px, 1.05cqw, 14px); font-weight: 800; letter-spacing: 0.03em;
+      .stats-row {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: clamp(6px, 0.8cqw, 12px);
+        font-size: var(--t-micro); font-weight: 800; letter-spacing: 0.1em;
         color: var(--muted);
-        border: 1px solid var(--line);
-        border-radius: 99px;
-        background: var(--surface);
-        box-shadow: 0 6px 14px -10px rgba(94, 56, 80, 0.34);
       }
-      .live i {
-        width: clamp(5px, 0.45cqw, 8px); height: clamp(5px, 0.45cqw, 8px); border-radius: 50%;
-        background: var(--lime);
-        box-shadow: 0 0 0 3px rgba(143, 208, 106, 0.22);
-        animation: livePulse 2.6s ease-in-out infinite;
-      }
-      .theme {
-        pointer-events: auto;
-        padding: clamp(4px, 0.6cqh, 8px) clamp(9px, 1cqw, 15px) clamp(3px, 0.5cqh, 7px);
-        font: inherit; font-size: clamp(9px, 1.05cqw, 14px); font-weight: 800;
-        letter-spacing: 0.03em;
+      .stats-row b {
+        font-size: var(--t-sm); font-weight: 900; letter-spacing: 0.02em;
+        font-variant-numeric: tabular-nums;
         color: var(--text);
-        border: 1px solid var(--line);
-        border-radius: 99px;
-        background: var(--surface);
-        box-shadow: 0 6px 14px -10px rgba(94, 56, 80, 0.34);
-        cursor: pointer;
-        transition: border-color 160ms ease, background 160ms ease, transform 120ms ease, box-shadow 160ms ease;
       }
-      .theme:hover {
-        border-color: var(--magenta);
+      #stat-wins { color: var(--lime); }
+      #stat-losses { color: var(--magenta); }
+      #stat-apples { color: var(--lime); }
+      #stat-bombs { color: var(--orange); }
+      .stats-foot {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: clamp(6px, 0.8cqw, 12px);
+        margin-top: clamp(2px, 0.3cqh, 4px);
+        padding-top: clamp(4px, 0.55cqh, 8px);
+        border-top: 1px solid var(--line);
+        font-size: var(--t-micro); font-weight: 800; letter-spacing: 0.08em;
+        color: var(--faint);
+        white-space: nowrap; overflow: hidden;
+      }
+      .stats-foot span { overflow: hidden; text-overflow: ellipsis; }
+      .stats-foot .key {
+        flex: none;
+        min-width: clamp(14px, 1.5cqh, 22px); height: clamp(14px, 1.5cqh, 22px);
+        padding: 0 3px;
+        display: grid; place-items: center;
+        font-size: var(--t-micro); letter-spacing: 0;
+        color: var(--muted);
+        border: 1px solid var(--line-strong);
+        border-radius: 6px;
         background: var(--surface-hi);
-        transform: translateY(-1px);
-        box-shadow: 0 10px 18px -12px rgba(94, 56, 80, 0.4);
-      }
-      .theme:focus-visible {
-        outline: 2px solid var(--focus);
-        outline-offset: 2px;
-      }
-      @keyframes livePulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.35; }
+        box-shadow: 0 2px 0 rgba(94, 56, 80, 0.12);
       }
 
       /* ---------- shared panel language ---------- */
@@ -304,10 +305,6 @@
       .row.eats .stat b { font-size: var(--t-lead); font-weight: 900; }
       #hud-apples { color: var(--lime); }
       #hud-bombs { color: var(--orange); }
-      .row.record { margin-top: calc(var(--gap) * 0.6); }
-      .row.record .stat b { font-size: var(--t-md); font-weight: 800; }
-      #hud-wins { color: var(--lime); }
-      #hud-losses { color: var(--magenta); }
 
       .log {
         margin-top: 0; min-height: 0; overflow: hidden;
@@ -603,7 +600,7 @@
       .winsummary .empty { margin-bottom: 4px; color: var(--faint); font-weight: 600; }
 
       .debug {
-        position: absolute; left: clamp(10px, 1.4cqw, 22px); top: clamp(52px, 8cqh, 78px); z-index: 8;
+        position: absolute; right: clamp(10px, 1.4cqw, 22px); top: clamp(10px, 1.4cqh, 22px); z-index: 8;
         display: none; flex-direction: column; gap: 8px;
         padding: clamp(8px, 1cqh, 13px) clamp(10px, 1.1cqw, 16px);
         border-radius: 12px;
@@ -693,9 +690,13 @@
       <div class="vignette"></div>
 
       <header class="stage-hud">
-        <div class="brand">GIFT<span>SNAKE</span></div>
-        <span class="live"><i aria-hidden="true"></i>LIVE</span>
-        <button class="theme" id="theme" type="button" aria-keyshortcuts="T">THEME</button>
+        <section class="stats" aria-label="Session stats">
+          <div class="stats-row"><span>WINS</span><b id="stat-wins">0</b></div>
+          <div class="stats-row"><span>LOSS</span><b id="stat-losses">0</b></div>
+          <div class="stats-row"><span>APPLES</span><b id="stat-apples">0</b></div>
+          <div class="stats-row"><span>BOMBS</span><b id="stat-bombs">0</b></div>
+          <div class="stats-foot"><span id="stat-theme">STRAWBERRY</span><kbd class="key">T</kbd></div>
+        </section>
       </header>
 
       <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
@@ -751,11 +752,6 @@
         <div class="row eats">
           <div class="stat"><span class="k">APPLES EATEN</span><b id="hud-apples">0</b></div>
           <div class="stat"><span class="k">BOMBS EATEN</span><b id="hud-bombs">0</b></div>
-        </div>
-
-        <div class="row record">
-          <div class="stat"><span class="k">WINS</span><b id="hud-wins">0</b></div>
-          <div class="stat"><span class="k">LOSSES</span><b id="hud-losses">0</b></div>
         </div>
 
         <div class="log">

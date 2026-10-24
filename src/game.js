@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { CONFIG, createState, step, spawnApple, spawnGiftApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateRescue, updateWin, freeCellFor } from './logic.js';
 import { APRON, apronPoint, walkStep, faceYaw, clearOf, segmentClear, sceneryLayout } from './apron.js';
+import { normaliseTotals, bumpTotals } from './totals.js';
 
 const $ = (s) => document.querySelector(s);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -22,15 +23,17 @@ const GIFTS = {
 const hud = {
   apples: $('#hud-apples'),
   bombs: $('#hud-bombs'),
-  wins: $('#hud-wins'),
-  losses: $('#hud-losses'),
+  statWins: $('#stat-wins'),
+  statLosses: $('#stat-losses'),
+  statApples: $('#stat-apples'),
+  statBombs: $('#stat-bombs'),
+  statTheme: $('#stat-theme'),
   toasts: $('#toasts'),
   log: $('#log'),
   banner: $('#banner'),
   bannerTitle: $('#banner-title'),
   bannerSub: $('#banner-sub'),
   flash: $('#flash'),
-  theme: $('#theme'),
   winSummary: $('#win-summary'),
   cd: $('#countdown'),
   cdNum: $('#countdown-num'),
@@ -1004,7 +1007,7 @@ function applyTheme(index) {
   bodyCells.material.color.set(th.accent);
   headCell.material.color.set(th.accent);
 
-  if (hud.theme) hud.theme.textContent = `THEME · ${th.name.toUpperCase()}`;
+  if (hud.statTheme) hud.statTheme.textContent = th.name.toUpperCase();
 }
 
 // apples
@@ -1213,6 +1216,7 @@ function flyBombToMouth(cell) {
       mesh.scale.setScalar(1 - p * 0.3);
       if (p < 1) return false;
       const cut = eatBomb(state, { x: head.x, y: head.y });
+      countEaten('bombs');
       sfx.explode();
       burst(to, BURST.bomb, { count: 22, power: 1.5 });
       bombDebris(cut);
@@ -2550,6 +2554,38 @@ function refreshHud() {
   hud.bombs.textContent = state.bombsEaten || 0;
 }
 
+// Session totals: per-round counters reset with the board, these do not.
+const TOTALS_KEY = 'giftsnake.totals';
+const totals = (() => {
+  try {
+    const raw = localStorage.getItem(TOTALS_KEY);
+    return normaliseTotals(raw ? JSON.parse(raw) : null);
+  } catch (e) {
+    // Private mode or corrupt JSON: start the session at zero.
+    return normaliseTotals(null);
+  }
+})();
+
+function saveTotals() {
+  try {
+    localStorage.setItem(TOTALS_KEY, JSON.stringify(totals));
+  } catch (e) {
+    // Storage unavailable; totals still count for this session.
+  }
+}
+
+function renderTotals() {
+  hud.statApples.textContent = totals.apples;
+  hud.statBombs.textContent = totals.bombs;
+}
+
+// Called once per eaten apple / bomb, never per frame.
+function countEaten(field) {
+  bumpTotals(totals, field);
+  saveTotals();
+  renderTotals();
+}
+
 function toast(html, kind = '') {
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
@@ -2695,8 +2731,8 @@ function saveRecord() {
 }
 
 function refreshRecord() {
-  hud.wins.textContent = record.wins;
-  hud.losses.textContent = record.losses;
+  hud.statWins.textContent = record.wins;
+  hud.statLosses.textContent = record.losses;
 }
 
 // One result per round: a rescue that is bombed free is not a loss, and a
@@ -3035,6 +3071,7 @@ function frame(ms) {
       if (res.moved) pushTrail();
       if (res.ate) {
         sfx.eat();
+        countEaten('apples');
         removeAppleMesh(res.ate);
         setWorld(res.ate, tmpVec);
         tmpVec.y = 0.62;
@@ -3042,6 +3079,7 @@ function frame(ms) {
       }
       if (res.bomb) {
         sfx.explode();
+        countEaten('bombs');
         removeBombMesh(res.bomb);
         setWorld(res.bomb, tmpVec);
         tmpVec.y = 0.62;
@@ -3143,13 +3181,6 @@ $('#restart').addEventListener('click', () => {
   reset();
 });
 
-if (hud.theme) {
-  hud.theme.addEventListener('click', () => {
-    unlockAudio();
-    applyTheme(themeIndex + 1);
-  });
-}
-
 function resize() {
   const s = stageSize();
   camera.aspect = s.w / s.h;
@@ -3165,6 +3196,7 @@ if (window.ResizeObserver) new ResizeObserver(resize).observe(stageEl);
 applyTheme(0);
 layoutBoard();
 refreshHud();
+renderTotals();
 renderLeaderboard();
 refreshRecord();
 hud.dbgSound.checked = soundOn;
