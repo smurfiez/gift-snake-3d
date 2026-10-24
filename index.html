@@ -428,6 +428,8 @@
         transition: transform 140ms ease;
       }
       .gift:hover .gift-ico { transform: scale(1.06) rotate(-3deg); }
+      .gift-img { width: clamp(34px, 4.4cqw, 56px); height: auto; display: block; }
+      .gift-fallback { font-size: clamp(22px, 3cqw, 34px); line-height: 1; }
 
       .gift-txt { display: contents; }
       .gift-name {
@@ -773,32 +775,32 @@
 
         <div class="gifts">
           <button class="gift g-apple" data-gift="apple" type="button" aria-keyshortcuts="1">
-            <span class="gift-ico" aria-hidden="true">🍎</span>
+            <span class="gift-ico"><img class="gift-img" src="assets/gifts/rose.svg" alt="" width="96" height="96" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="gift-fallback" hidden aria-hidden="true">🍎</span></span>
             <span class="gift-txt"><span class="gift-name">Apple</span><span class="gift-desc">Drop 1 apple</span></span>
             <kbd class="gift-key">1</kbd>
           </button>
           <button class="gift g-bomb" data-gift="bomb" type="button" aria-keyshortcuts="2">
-            <span class="gift-ico" aria-hidden="true">💣</span>
+            <span class="gift-ico"><img class="gift-img" src="assets/gifts/bomb.svg" alt="" width="96" height="96" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="gift-fallback" hidden aria-hidden="true">💣</span></span>
             <span class="gift-txt"><span class="gift-name">Bomb</span><span class="gift-desc">Drop a bomb</span></span>
             <kbd class="gift-key">2</kbd>
           </button>
           <button class="gift g-speed" data-gift="speed" type="button" aria-keyshortcuts="3">
-            <span class="gift-ico" aria-hidden="true">⚡</span>
+            <span class="gift-ico"><img class="gift-img" src="assets/gifts/bolt.svg" alt="" width="96" height="96" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="gift-fallback" hidden aria-hidden="true">⚡</span></span>
             <span class="gift-txt"><span class="gift-name">Speed up</span><span class="gift-desc">Snake faster</span></span>
             <kbd class="gift-key">3</kbd>
           </button>
           <button class="gift g-slow" data-gift="slow" type="button" aria-keyshortcuts="4">
-            <span class="gift-ico" aria-hidden="true">🐌</span>
+            <span class="gift-ico"><img class="gift-img" src="assets/gifts/snail.svg" alt="" width="96" height="96" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="gift-fallback" hidden aria-hidden="true">🐌</span></span>
             <span class="gift-txt"><span class="gift-name">Slow down</span><span class="gift-desc">Snake slower</span></span>
             <kbd class="gift-key">4</kbd>
           </button>
           <button class="gift g-widen" data-gift="widen" type="button" aria-keyshortcuts="5">
-            <span class="gift-ico" aria-hidden="true">↔️</span>
+            <span class="gift-ico"><img class="gift-img" src="assets/gifts/widen.svg" alt="" width="96" height="96" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="gift-fallback" hidden aria-hidden="true">↔️</span></span>
             <span class="gift-txt"><span class="gift-name">Widen</span><span class="gift-desc">+2 columns</span></span>
             <kbd class="gift-key">5</kbd>
           </button>
           <button class="gift g-taller" data-gift="taller" type="button" aria-keyshortcuts="6">
-            <span class="gift-ico" aria-hidden="true">↕️</span>
+            <span class="gift-ico"><img class="gift-img" src="assets/gifts/taller.svg" alt="" width="96" height="96" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="gift-fallback" hidden aria-hidden="true">↕️</span></span>
             <span class="gift-txt"><span class="gift-name">Taller</span><span class="gift-desc">+2 rows</span></span>
             <kbd class="gift-key">6</kbd>
           </button>
