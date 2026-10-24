@@ -1653,7 +1653,7 @@ function freeSpot(from, taken) {
 function walkTarget(s) {
   const taken = spectators
     .filter((o) => o !== s)
-    .map((o) => ({ x: o.fig.position.x, z: o.fig.position.z }));
+    .map((o) => o.dest ?? { x: o.fig.position.x, z: o.fig.position.z });
   return freeSpot(s.fig.position, taken);
 }
 

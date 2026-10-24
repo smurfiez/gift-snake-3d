@@ -14,7 +14,8 @@ const insideApron = (p, w, h) => {
   const dx = p.x < 0 ? -p.x : p.x > w ? p.x - w : 0;
   const dz = p.z < 0 ? -p.z : p.z > h ? p.z - h : 0;
   const outsideBoard = p.x < -0.01 || p.x > w + 0.01 || p.z < -0.01 || p.z > h + 0.01;
-  return outsideBoard && Math.max(dx, dz) <= APRON.far + 0.001;
+  const dist = Math.max(dx, dz);
+  return outsideBoard && dist >= APRON.near - 0.001 && dist <= APRON.far + 0.001;
 };
 
 const insideBoard = (p, w, h) =>
