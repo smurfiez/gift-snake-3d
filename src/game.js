@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, createState, step, spawnApple, spawnGiftApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateRescue, updateWin, freeCellFor } from './logic.js';
-import { sceneryLayout } from './apron.js';
+import { APRON, apronPoint, walkStep, faceYaw, clearOf, sceneryLayout } from './apron.js';
 
 const $ = (s) => document.querySelector(s);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -1482,10 +1482,9 @@ function makeThrower() {
 }
 
 // ---------- spectator crowd ----------
-// The crowd lives outside the wall for the whole round: it bobs, sways and
-// watches the snake. Each gift goes to the nearest free spectator, who shows
-// the gifter's avatar and lobs the item in.
-const RIM_GAP = 1.15;
+// The crowd lives on the apron outside the wall: figures walk between spots,
+// turn to watch the snake, and chat with their neighbour. Each gift goes to the
+// nearest free spectator, who shows the gifter's avatar and lobs the item in.
 const spectators = [];
 const avatarCache = new Map();
 const bubbleCache = new Map();
@@ -1573,25 +1572,24 @@ function makeSpectator() {
   bubble.position.y = 2.34;
   bubble.visible = false;
   fig.add(bubble);
+  fig.userData.isSpectator = true;
   scene.add(fig);
   return {
     fig, pic, bubble, arm: fig.userData.arm,
-    home: { x: 0, z: 0 }, baseYaw: 0, seed: rnd(0, TAU),
+    baseYaw: 0, seed: rnd(0, TAU),
     job: null, avatarT: 0, bubbleT: 0, chatT: rnd(4, 9),
     turn: 0, reply: null,
+    dest: null, restT: rnd(0.4, 1.8), walkT: 0,
   };
 }
 
-// Five posts along the front wall, the edge the camera sees below the board.
+// Anyone may wander the whole apron; the front bias keeps most of them visible.
 function layoutSpectators() {
   if (!spectators.length) for (let i = 0; i < 5; i++) spectators.push(makeSpectator());
   const { w, h } = state;
-  const spots = [0.85, w * 0.3, w * 0.5, w * 0.7, w - 0.85];
-  for (let i = 0; i < spectators.length; i++) {
-    const s = spectators[i];
-    s.home.x = spots[i % spots.length];
-    s.home.z = h + RIM_GAP;
-    s.fig.position.set(s.home.x, 0, s.home.z);
+  for (const s of spectators) {
+    const spot = apronPoint(w, h);
+    s.fig.position.set(spot.x, 0, spot.z);
     s.fig.lookAt(w / 2, 0, h / 2);
     s.baseYaw = s.fig.rotation.y;
   }
@@ -1601,6 +1599,8 @@ function layoutSpectators() {
 function clearSpectator(s) {
   if (s.job && s.job.proj) scene.remove(s.job.proj);
   s.job = null;
+  s.dest = null;
+  s.restT = rnd(0.6, 2);
   s.arm.rotation.x = 0;
   s.fig.rotation.x = 0;
   s.pic.visible = false;
@@ -1617,10 +1617,32 @@ function nearestFreeSpectator(cell) {
   let bd = Infinity;
   for (const s of spectators) {
     if (s.job) continue;
-    const d = Math.hypot(s.home.x - (cell.x + 0.5), s.home.z - (cell.y + 0.5));
+    const d = Math.hypot(s.fig.position.x - (cell.x + 0.5), s.fig.position.z - (cell.y + 0.5));
     if (d < bd) { bd = d; best = s; }
   }
   return best;
+}
+
+// A walk target nobody is standing on and no scenery occupies. Candidates are
+// retried a few times; if the apron is crowded the last one is good enough.
+function walkTarget(s) {
+  const others = spectators
+    .filter((o) => o !== s)
+    .map((o) => ({ x: o.fig.position.x, z: o.fig.position.z }));
+  const props = sceneryGroup.children.map((c) => ({ x: c.position.x, z: c.position.z }));
+  let dest = apronPoint(state.w, state.h);
+  for (let i = 0; i < 8; i++) {
+    if (clearOf(dest, others, APRON.spacing) && clearOf(dest, props, 0.6)) break;
+    dest = apronPoint(state.w, state.h);
+  }
+  return dest;
+}
+
+// Turn on the spot back to the playfield, along the short arc.
+function easeYawToBoard(s, dt) {
+  const want = faceYaw(s.fig.position, { x: state.w / 2, z: state.h / 2 });
+  let delta = ((want - s.baseYaw + Math.PI) % TAU + TAU) % TAU - Math.PI;
+  s.baseYaw += delta * Math.min(1, dt * 2.2);
 }
 
 function showAvatar(s, viewer) {
@@ -1646,7 +1668,7 @@ function neighbourOf(s) {
   let bd = Infinity;
   for (const o of spectators) {
     if (o === s) continue;
-    const d = Math.abs(o.home.x - s.home.x);
+    const d = Math.abs(o.fig.position.x - s.fig.position.x);
     if (d < bd) { bd = d; best = o; }
   }
   return best;
@@ -1668,6 +1690,9 @@ function throwWithSpectators(items, kind, viewer) {
       start: new THREE.Vector3(),
       target: new THREE.Vector3(cell.x + 0.5, 0.4, cell.y + 0.5),
     };
+    // Face the landing cell: the hand origin is read off the figure, so a
+    // walked position throws from where the figure actually stands.
+    s.baseYaw = faceYaw(s.fig.position, { x: cell.x + 0.5, z: cell.y + 0.5 });
     showAvatar(s, viewer);
     s.bubble.visible = false;
     s.bubbleT = 0;
@@ -1680,7 +1705,9 @@ const throwFwd = new THREE.Vector3();
 
 function updateSpectators(dt) {
   for (const s of spectators) {
-    s.fig.position.y = Math.sin(clock * 2.1 + s.seed) * 0.035;
+    const walking = !s.job && s.dest !== null && s.bubbleT <= 0;
+    s.walkT += dt;
+    s.fig.position.y = Math.sin(s.walkT * (walking ? 8.5 : 2.1) + s.seed) * (walking ? 0.07 : 0.035);
     s.fig.rotation.y = s.baseYaw + Math.sin(clock * 0.9 + s.seed) * 0.07 + s.turn;
 
     if (s.avatarT > 0) {
@@ -1691,7 +1718,23 @@ function updateSpectators(dt) {
 
     const j = s.job;
     if (!j) {
-      s.fig.position.x = s.home.x + Math.sin(clock * 0.45 + s.seed) * 0.1;
+      // A bubble holds the figure still: walkers stop to talk, then move on.
+      const paused = s.bubbleT > 0;
+      if (s.dest === null) {
+        s.restT -= dt;
+        if (s.restT <= 0) s.dest = walkTarget(s);
+      } else if (!paused) {
+        const step = walkStep(s.fig.position, s.dest, 0.45, dt);
+        if (!step.arrived) s.baseYaw = faceYaw(s.fig.position, s.dest);
+        s.fig.position.x = step.x;
+        s.fig.position.z = step.z;
+        if (step.arrived) {
+          s.dest = null;
+          s.restT = rnd(1.2, 3.6);
+        }
+      }
+      // Standing or talking, a figure turns back to watch the playfield.
+      if (s.dest === null || paused) easeYawToBoard(s, dt);
 
       if (s.bubbleT > 0) {
         s.bubbleT -= dt;
@@ -1716,9 +1759,9 @@ function updateSpectators(dt) {
         }
       } else if (s.chatT > 0) {
         s.chatT -= dt;
-      } else {
+      } else if (s.dest === null) {
         const mate = neighbourOf(s);
-        const turn = mate ? Math.sign(mate.home.x - s.home.x) * 0.45 : 0;
+        const turn = mate ? Math.sign(mate.fig.position.x - s.fig.position.x) * 0.45 : 0;
         say(s, pick(CHATTER), turn);
         s.chatT = rnd(5, 11);
         // Half the time the neighbour answers, which is what makes the row alive.
