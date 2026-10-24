@@ -1638,6 +1638,22 @@ function walkTarget(s) {
   return dest;
 }
 
+// Walkers must stay on the apron: the wall boxes reach 0.34 past the board and
+// the corner posts 0.46, so the clear band is the same 0.7 the apron uses.
+const WALK_CLEAR = APRON.near;
+
+// A straight walk between two apron points can cut a board corner, so an axis
+// that would enter the clear band is held at its last outside value while the
+// other axis keeps moving: the figure slides along the wall instead of entering.
+function holdOffBoard(pos, prevX, prevZ) {
+  const inX = pos.x > -WALK_CLEAR && pos.x < state.w + WALK_CLEAR;
+  const inZ = pos.z > -WALK_CLEAR && pos.z < state.h + WALK_CLEAR;
+  if (!inX || !inZ) return false;
+  if (prevX <= -WALK_CLEAR || prevX >= state.w + WALK_CLEAR) pos.x = prevX;
+  if (prevZ <= -WALK_CLEAR || prevZ >= state.h + WALK_CLEAR) pos.z = prevZ;
+  return true;
+}
+
 // Turn on the spot back to the playfield, along the short arc.
 function easeYawToBoard(s, dt) {
   const want = faceYaw(s.fig.position, { x: state.w / 2, z: state.h / 2 });
@@ -1724,13 +1740,18 @@ function updateSpectators(dt) {
         s.restT -= dt;
         if (s.restT <= 0) s.dest = walkTarget(s);
       } else if (!paused) {
+        const px = s.fig.position.x;
+        const pz = s.fig.position.z;
         const step = walkStep(s.fig.position, s.dest, 0.45, dt);
         if (!step.arrived) s.baseYaw = faceYaw(s.fig.position, s.dest);
         s.fig.position.x = step.x;
         s.fig.position.z = step.z;
-        if (step.arrived) {
+        const blocked = holdOffBoard(s.fig.position, px, pz);
+        const moved = Math.abs(s.fig.position.x - px) + Math.abs(s.fig.position.z - pz);
+        if (step.arrived || (blocked && moved < 0.45 * dt * 0.3)) {
+          // Arrived, or ran into a wall it can no longer slide along.
           s.dest = null;
-          s.restT = rnd(1.2, 3.6);
+          s.restT = blocked ? rnd(0.8, 2) : rnd(1.2, 3.6);
         }
       }
       // Standing or talking, a figure turns back to watch the playfield.
