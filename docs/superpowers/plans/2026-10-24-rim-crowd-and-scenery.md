@@ -118,7 +118,7 @@ Next to `CAM_TILT`, add `const RIM_FRAME = 1.45;` with a one-line comment that t
 
 - [ ] **Step 2: Fit the stage rectangle on both axes**
 
-In `fitDistance`, loop `x` over `[-RIM_FRAME, state.w + RIM_FRAME]`, `z` over `[-RIM_FRAME, state.h + RIM_FRAME]`, `y` over `[0, 2.2]`, and take the max of both `right / tanH + along` and `up / tanV + along`, as the pre-apron version did. Keep the trailing `* 1.01 + 0.4` padding.
+In `fitDistance`, loop `x` over `[-RIM_FRAME, state.w + RIM_FRAME]`, `z` over `[-RIM_FRAME, state.h + RIM_FRAME]`, `y` over `[0, 1.8]`, and take the max of both `right / tanH + along` and `up / tanV + along`, as the pre-apron version did. Keep the trailing `* 1.005 + 0.08` padding.
 
 - [ ] **Step 3: Verify framing in the browser**
 
