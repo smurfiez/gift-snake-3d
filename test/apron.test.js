@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { APRON, apronPoint, walkStep, faceYaw, clearOf, sceneryLayout } from '../src/apron.js';
+import { APRON, apronPoint, walkStep, faceYaw, clearOf, segmentClear, sceneryLayout } from '../src/apron.js';
 
 const W = 16;
 const H = 17;
@@ -71,6 +71,34 @@ test('clearOf rejects points closer than spacing', () => {
   const others = [{ x: 0, z: 0 }];
   assert.equal(clearOf({ x: APRON.spacing / 2, z: 0 }, others, APRON.spacing), false);
   assert.equal(clearOf({ x: APRON.spacing * 2, z: 0 }, others, APRON.spacing), true);
+});
+
+test('segmentClear passes a line that runs beside the board', () => {
+  assert.equal(segmentClear({ x: -1.2, z: 3 }, { x: -1.2, z: 14 }, W, H), true);
+  assert.equal(segmentClear({ x: W + 1.2, z: 3 }, { x: W + 1.2, z: 14 }, W, H), true);
+  assert.equal(segmentClear({ x: 2, z: H + 1.2 }, { x: 13, z: H + 1.2 }, W, H), true);
+  // Running into the board is not clear.
+  assert.equal(segmentClear({ x: 20, z: 8 }, { x: 14, z: 8 }, W, H), false);
+});
+
+test('segmentClear rejects a line that cuts a board corner', () => {
+  // Right-side point to a front point: the straight line clips the corner.
+  assert.equal(segmentClear({ x: W + 0.9, z: 8 }, { x: 8, z: H + 0.9 }, W, H), false);
+  // Going the long way round the same two points is clear.
+  assert.equal(segmentClear({ x: W + 1.2, z: 8 }, { x: W + 1.2, z: H + 1.2 }, W, H), true);
+});
+
+test('segmentClear is pure and stable across calls', () => {
+  const from = Object.freeze({ x: W + 0.9, z: 8 });
+  const to = Object.freeze({ x: 8, z: H + 0.9 });
+  const first = segmentClear(from, to, W, H);
+  const second = segmentClear(from, to, W, H);
+  assert.equal(first, second);
+  assert.deepEqual({ ...from }, { x: W + 0.9, z: 8 });
+  assert.deepEqual({ ...to }, { x: 8, z: H + 0.9 });
+  // The margin is what decides a grazing path.
+  assert.equal(segmentClear({ x: 8, z: H + 0.2 }, { x: 9, z: H + 0.2 }, W, H, 0.5), false);
+  assert.equal(segmentClear({ x: 8, z: H + 0.2 }, { x: 9, z: H + 0.2 }, W, H, 0.1), true);
 });
 
 test('sceneryLayout spreads props across the apron', () => {

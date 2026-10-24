@@ -40,6 +40,30 @@ export function clearOf(point, others, minDist) {
   return true;
 }
 
+// True when the straight segment never enters the board rectangle grown by
+// margin on each side. Slab test, so a segment that only grazes a corner still
+// counts as blocked.
+export function segmentClear(from, to, w, h, margin = 0.5) {
+  let t0 = 0;
+  let t1 = 1;
+  const slab = (p, d, lo, hi) => {
+    if (d === 0) return p > lo && p < hi;
+    let a = (lo - p) / d;
+    let b = (hi - p) / d;
+    if (a > b) {
+      const swap = a;
+      a = b;
+      b = swap;
+    }
+    t0 = Math.max(t0, a);
+    t1 = Math.min(t1, b);
+    return t0 <= t1;
+  };
+  const x = slab(from.x, to.x - from.x, -margin, w + margin);
+  const z = x && slab(from.z, to.z - from.z, -margin, h + margin);
+  return !(x && z);
+}
+
 export function sceneryLayout(w, h, rand = Math.random, count = 14) {
   const items = [];
   for (let i = 0; i < count; i++) {

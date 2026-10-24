@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { CONFIG, createState, step, spawnApple, spawnGiftApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateRescue, updateWin, freeCellFor } from './logic.js';
-import { APRON, apronPoint, walkStep, faceYaw, clearOf, sceneryLayout } from './apron.js';
+import { APRON, apronPoint, walkStep, faceYaw, clearOf, segmentClear, sceneryLayout } from './apron.js';
 
 const $ = (s) => document.querySelector(s);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -592,8 +592,9 @@ function layoutBoard() {
   boardShadow.scale.set(w + 4, h + 4, 1);
   snapBoard();
   paintChecker();
-  layoutSpectators();
+  // Scenery first: spectator spawns reject against the props that exist now.
   layoutScenery();
+  layoutSpectators();
 }
 
 // snake: one continuous tube swept along the eased visual path
@@ -1587,11 +1588,13 @@ function makeSpectator() {
 function layoutSpectators() {
   if (!spectators.length) for (let i = 0; i < 5; i++) spectators.push(makeSpectator());
   const { w, h } = state;
+  const placed = [];
   for (const s of spectators) {
-    const spot = apronPoint(w, h);
+    const spot = freeSpot(null, placed) || apronPoint(w, h);
     s.fig.position.set(spot.x, 0, spot.z);
     s.fig.lookAt(w / 2, 0, h / 2);
     s.baseYaw = s.fig.rotation.y;
+    placed.push({ x: spot.x, z: spot.z });
   }
   for (const s of spectators) clearSpectator(s);
 }
@@ -1623,28 +1626,34 @@ function nearestFreeSpectator(cell) {
   return best;
 }
 
-// A walk target nobody is standing on and no scenery occupies. Candidates are
-// retried a few times; if the apron is crowded the last one is good enough.
-function walkTarget(s) {
-  const others = spectators
-    .filter((o) => o !== s)
-    .map((o) => ({ x: o.fig.position.x, z: o.fig.position.z }));
-  const props = sceneryGroup.children.map((c) => ({ x: c.position.x, z: c.position.z }));
-  let dest = apronPoint(state.w, state.h);
-  for (let i = 0; i < 8; i++) {
-    if (clearOf(dest, others, APRON.spacing) && clearOf(dest, props, 0.6)) break;
-    dest = apronPoint(state.w, state.h);
-  }
-  return dest;
-}
-
 // Walkers must stay on the apron: the wall boxes reach 0.34 past the board and
 // the corner posts 0.46, so the clear band is the same 0.7 the apron uses.
 const WALK_CLEAR = APRON.near;
 
-// A straight walk between two apron points can cut a board corner, so an axis
-// that would enter the clear band is held at its last outside value while the
-// other axis keeps moving: the figure slides along the wall instead of entering.
+// One spot on the apron: clear of the other figures, the scenery, and — when a
+// figure has to walk there — clear of the board on the way. Null when full.
+function freeSpot(from, taken) {
+  const props = sceneryGroup.children.map((c) => ({ x: c.position.x, z: c.position.z }));
+  for (let i = 0; i < 8; i++) {
+    const spot = apronPoint(state.w, state.h);
+    if (!clearOf(spot, taken, APRON.spacing)) continue;
+    if (!clearOf(spot, props, 0.6)) continue;
+    if (from && !segmentClear(from, spot, state.w, state.h, WALK_CLEAR)) continue;
+    return spot;
+  }
+  return null;
+}
+
+// A destination on the near side of the board; null when the apron is crowded.
+function walkTarget(s) {
+  const taken = spectators
+    .filter((o) => o !== s)
+    .map((o) => ({ x: o.fig.position.x, z: o.fig.position.z }));
+  return freeSpot(s.fig.position, taken);
+}
+
+// Safety net for a step that slips inside anyway: an axis whose previous value
+// was outside the band is held there, the other axis keeps moving.
 function holdOffBoard(pos, prevX, prevZ) {
   const inX = pos.x > -WALK_CLEAR && pos.x < state.w + WALK_CLEAR;
   const inZ = pos.z > -WALK_CLEAR && pos.z < state.h + WALK_CLEAR;
@@ -1684,7 +1693,7 @@ function neighbourOf(s) {
   let bd = Infinity;
   for (const o of spectators) {
     if (o === s) continue;
-    const d = Math.abs(o.fig.position.x - s.fig.position.x);
+    const d = Math.hypot(o.fig.position.x - s.fig.position.x, o.fig.position.z - s.fig.position.z);
     if (d < bd) { bd = d; best = o; }
   }
   return best;
@@ -1723,7 +1732,7 @@ function updateSpectators(dt) {
   for (const s of spectators) {
     const walking = !s.job && s.dest !== null && s.bubbleT <= 0;
     s.walkT += dt;
-    s.fig.position.y = Math.sin(s.walkT * (walking ? 8.5 : 2.1) + s.seed) * (walking ? 0.07 : 0.035);
+    s.fig.position.y = Math.sin(s.walkT * 2.1 + s.seed) * (walking ? 0.07 : 0.035);
     s.fig.rotation.y = s.baseYaw + Math.sin(clock * 0.9 + s.seed) * 0.07 + s.turn;
 
     if (s.avatarT > 0) {
@@ -1738,7 +1747,10 @@ function updateSpectators(dt) {
       const paused = s.bubbleT > 0;
       if (s.dest === null) {
         s.restT -= dt;
-        if (s.restT <= 0) s.dest = walkTarget(s);
+        if (s.restT <= 0) {
+          s.dest = walkTarget(s);
+          if (!s.dest) s.restT = rnd(0.6, 1.6);
+        }
       } else if (!paused) {
         const px = s.fig.position.x;
         const pz = s.fig.position.z;
@@ -1747,9 +1759,8 @@ function updateSpectators(dt) {
         s.fig.position.x = step.x;
         s.fig.position.z = step.z;
         const blocked = holdOffBoard(s.fig.position, px, pz);
-        const moved = Math.abs(s.fig.position.x - px) + Math.abs(s.fig.position.z - pz);
-        if (step.arrived || (blocked && moved < 0.45 * dt * 0.3)) {
-          // Arrived, or ran into a wall it can no longer slide along.
+        if (step.arrived || blocked) {
+          // Arrived, or the safety net caught the step: stand and pick again.
           s.dest = null;
           s.restT = blocked ? rnd(0.8, 2) : rnd(1.2, 3.6);
         }
@@ -1771,22 +1782,22 @@ function updateSpectators(dt) {
         ? -2.25 + Math.sin(clock * 9 + s.seed) * 0.3
         : Math.sin(clock * 1.6 + s.seed) * 0.05;
 
-      if (s.reply) {
+      if (s.reply && s.dest === null) {
         s.reply.t -= dt;
         if (s.reply.t <= 0) {
           say(s, s.reply.text, s.reply.turn);
           s.reply = null;
           s.chatT = Math.max(s.chatT, 3);
         }
-      } else if (s.chatT > 0) {
+      } else if (s.chatT > 0 && !s.reply) {
         s.chatT -= dt;
-      } else if (s.dest === null) {
+      } else if (s.dest === null && !s.reply) {
         const mate = neighbourOf(s);
         const turn = mate ? Math.sign(mate.fig.position.x - s.fig.position.x) * 0.45 : 0;
         say(s, pick(CHATTER), turn);
         s.chatT = rnd(5, 11);
         // Half the time the neighbour answers, which is what makes the row alive.
-        if (mate && Math.random() < 0.55 && !mate.job && mate.bubbleT <= 0) {
+        if (mate && mate.dest === null && Math.random() < 0.55 && !mate.job && mate.bubbleT <= 0) {
           mate.reply = { text: pick(CHATTER), t: rnd(0.55, 1.3), turn: -turn };
         }
       }
