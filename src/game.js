@@ -2989,6 +2989,8 @@ function reset(keepGrowth = false) {
   hideBanner();
   hud.flash.classList.remove('on');
   layoutBoard();
+  // Every new round advances the palette; boot does not call reset, so round one stays on theme 0.
+  applyTheme(themeIndex + 1);
   refreshHud();
   camDist = fitDistance();
   camTarget.set(state.w / 2, 0, state.h / 2);
