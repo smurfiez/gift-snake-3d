@@ -40,7 +40,7 @@
         --focus: #cf4f82;
         --body-bg: radial-gradient(ellipse at 50% 30%, #f3e2ec, #dfc8d8 70%);
         --mono: "Nunito", "Quicksand", ui-rounded, "SF Pro Rounded", "Arial Rounded MT Bold", system-ui, sans-serif;
-        --stage-h: 76%;
+        --stage-h: 100%;
         --deck-h: 24%;
 
         /* deck scale: tied to viewport height because the deck is a height slice */
@@ -52,8 +52,8 @@
         --t-sm: clamp(10px, 0.92cqh, 18px);
       }
 
-      /* Midnight theme: the only palette that repaints the deck surfaces as
-         well as the accents, so the stream stays legible in the dark. */
+      /* Dark environments (Football, Dungeon, Space): repaint the deck surfaces
+         as well as the accents, so the stream stays legible in the dark. */
       :root[data-theme="dark"] {
         color-scheme: dark;
         --ink: #140f18;
@@ -114,15 +114,17 @@
 
       ::selection { background: rgba(255, 143, 174, 0.3); color: var(--text); }
 
-      /* ---------- stage: top two thirds ---------- */
+      /* ---------- stage: the whole frame ---------- */
 
       .stage {
         position: absolute; inset: 0 0 auto 0;
         height: var(--stage-h);
         overflow: hidden;
         background: var(--stage-bg);
-        border-bottom: 1px solid var(--line);
       }
+
+      /* The board owns the whole frame; the gift deck floats over it. */
+      .frame.show-deck .deck { display: grid; }
 
       #app { position: absolute; inset: 0; }
       #app canvas { display: block; }
@@ -178,6 +180,13 @@
       #stat-losses { color: var(--magenta); }
       #stat-apples { color: var(--lime); }
       #stat-bombs { color: var(--orange); }
+      .stats-rule {
+        margin-top: clamp(2px, 0.3cqh, 4px);
+        max-width: 100%; min-width: 0;
+        font-size: var(--t-micro); font-weight: 700; letter-spacing: 0.02em;
+        color: var(--faint);
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
       .stats-foot {
         display: flex; align-items: center; justify-content: space-between;
         gap: clamp(6px, 0.8cqw, 12px);
@@ -222,17 +231,18 @@
         background: linear-gradient(90deg, transparent, rgba(255, 143, 174, 0.45), rgba(95, 201, 184, 0.35), transparent);
       }
 
-      /* ---------- deck: bottom third ---------- */
+      /* ---------- deck: overlay along the bottom edge ---------- */
 
       .deck {
-        position: absolute; inset: auto 0 0 0;
+        position: absolute; inset: auto 0 0 0; z-index: 6;
         height: var(--deck-h);
-        display: grid;
+        display: none;
         grid-template-columns: minmax(220px, 34%) 1fr;
         gap: clamp(6px, 0.6cqh, 10px);
         padding: clamp(6px, 0.7cqh, 12px);
         background: var(--deck-bg);
         border-top: 1px solid var(--line);
+        box-shadow: 0 -18px 40px -28px rgba(74, 40, 62, 0.6);
       }
 
       /* scoreboard */
@@ -441,6 +451,7 @@
         width: min(480px, 54cqw);
         pointer-events: none;
       }
+      .toasts[hidden] { display: none; }
       .toast {
         position: relative;
         padding: clamp(7px, 1cqh, 14px) clamp(12px, 1.2cqw, 18px) clamp(7px, 1cqh, 14px) clamp(15px, 1.4cqw, 20px);
@@ -579,6 +590,13 @@
       .debug-head { font-size: var(--t-micro); font-weight: 800; letter-spacing: 0.18em; color: var(--muted); }
       .debug-row { display: flex; align-items: center; gap: 8px; cursor: pointer; white-space: nowrap; }
       .debug-row input { accent-color: var(--magenta); margin: 0; }
+      .debug-state {
+        margin-left: auto; padding: 0; border: 0; background: none;
+        font: inherit; font-weight: 800; color: var(--muted);
+        white-space: nowrap; cursor: pointer;
+      }
+      .debug-state:hover { color: var(--text); }
+      .debug-state:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
       .debug-row select {
         margin-left: auto; padding: 2px 6px; border-radius: 8px;
         border: 1px solid var(--line); background: var(--surface-hi); color: var(--text);
@@ -601,7 +619,6 @@
       }
 
       @container (max-width: 640px) {
-        .stage { height: 74%; }
         .deck {
           height: 26%;
           grid-template-columns: minmax(110px, 34%) 1fr;
@@ -654,7 +671,8 @@
           <div class="stats-row"><span>LOSS</span><b id="stat-losses">0</b></div>
           <div class="stats-row"><span>APPLES</span><b id="stat-apples">0</b></div>
           <div class="stats-row"><span>BOMBS</span><b id="stat-bombs">0</b></div>
-          <button class="stats-foot" id="stat-theme-btn" type="button" aria-keyshortcuts="T" aria-label="Change theme"><span id="stat-theme">STRAWBERRY</span><kbd class="key">T</kbd></button>
+          <div class="stats-rule" id="stat-rule">Surf pair · Tide bomb</div>
+          <button class="stats-foot" id="stat-theme-btn" type="button" aria-keyshortcuts="T" aria-label="Change environment"><span id="stat-theme">BEACH</span><kbd class="key">T</kbd></button>
         </section>
       </header>
 
@@ -680,6 +698,19 @@
         <label class="debug-row">
           <input type="checkbox" id="dbg-gifts" />
           <span>Random gifts</span>
+        </label>
+        <label class="debug-row">
+          <input type="checkbox" id="dbg-deck" />
+          <span>Gift deck</span>
+        </label>
+        <label class="debug-row">
+          <input type="checkbox" id="dbg-toasts" checked />
+          <span>Toasts</span>
+        </label>
+        <label class="debug-row">
+          <input type="checkbox" id="dbg-tiktok" />
+          <span>TikTok gifts</span>
+          <button type="button" class="debug-state" id="dbg-tiktok-state" title="TikTok bridge status">off</button>
         </label>
         <label class="debug-row">
           <span>Speed</span>
@@ -728,7 +759,7 @@
         <div class="gifts">
           <button class="gift g-apple" data-gift="apple" type="button" aria-keyshortcuts="1">
             <span class="gift-ico"><img class="gift-img" src="assets/gifts/rose.svg" alt="" width="96" height="96" onerror="this.hidden=true;this.nextElementSibling.hidden=false" /><span class="gift-fallback" hidden aria-hidden="true">🍎</span></span>
-            <span class="gift-txt"><span class="gift-name">Apple</span><span class="gift-desc">Drop 1 apple</span></span>
+            <span class="gift-txt"><span class="gift-name">Apple</span><span class="gift-desc">Drop fruit</span></span>
             <kbd class="gift-key">1</kbd>
           </button>
           <button class="gift g-bomb" data-gift="bomb" type="button" aria-keyshortcuts="2">

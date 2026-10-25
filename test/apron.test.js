@@ -102,6 +102,19 @@ test('segmentClear is pure and stable across calls', () => {
   assert.equal(segmentClear({ x: 8, z: H + 0.2 }, { x: 9, z: H + 0.2 }, W, H, 0.1), true);
 });
 
+test('sceneryLayout honours an explicit kinds list and falls back when empty', () => {
+  const single = sceneryLayout(W, H, Math.random, 6, ['bush']);
+  assert.equal(single.length, 6);
+  for (const item of single) assert.equal(item.kind, 'bush');
+
+  const custom = sceneryLayout(W, H, Math.random, 6, ['crate', 'flower']);
+  for (const item of custom) assert.ok(['crate', 'flower'].includes(item.kind), `escaped kinds: ${item.kind}`);
+
+  const fallback = sceneryLayout(W, H, Math.random, 6, []);
+  assert.equal(fallback.length, 6);
+  for (const item of fallback) assert.ok(KINDS.includes(item.kind), `unknown kind: ${item.kind}`);
+});
+
 test('sceneryLayout spreads props across the apron', () => {
   const items = sceneryLayout(W, H, Math.random, 14);
   assert.equal(items.length, 14);

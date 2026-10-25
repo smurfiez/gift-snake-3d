@@ -1,6 +1,6 @@
 export const APRON = Object.freeze({ near: 0.7, far: 1.0, frontBias: 0.8, spacing: 0.85 });
 
-const SCENERY_KINDS = ['bush', 'rock', 'flower', 'crate'];
+export const SCENERY_KINDS = ['bush', 'rock', 'flower', 'crate'];
 
 // Points ring the board: mostly in front of the camera, the rest along the sides.
 export function apronPoint(w, h, rand = Math.random, bias = APRON.frontBias) {
@@ -64,7 +64,8 @@ export function segmentClear(from, to, w, h, margin = 0.5) {
   return !(x && z);
 }
 
-export function sceneryLayout(w, h, rand = Math.random, count = 14) {
+export function sceneryLayout(w, h, rand = Math.random, count = 14, kinds = SCENERY_KINDS) {
+  const pool = kinds.length ? kinds : SCENERY_KINDS;
   const items = [];
   for (let i = 0; i < count; i++) {
     let spot = null;
@@ -74,7 +75,7 @@ export function sceneryLayout(w, h, rand = Math.random, count = 14) {
     }
     if (!spot) break;
     items.push({
-      kind: SCENERY_KINDS[Math.floor(rand() * SCENERY_KINDS.length)],
+      kind: pool[Math.floor(rand() * pool.length)],
       x: spot.x,
       z: spot.z,
       rot: rand() * Math.PI * 2,

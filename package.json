@@ -4,6 +4,12 @@
   "type": "module",
   "scripts": {
     "start": "python3 -m http.server 5173",
+    "bridge": "node server/bridge.mjs",
+    "feed": "node scripts/feed.mjs",
     "test": "node --test"
+  },
+  "dependencies": {
+    "tiktok-live-connector": "^2.5.0",
+    "ws": "^8.22.0"
   }
 }

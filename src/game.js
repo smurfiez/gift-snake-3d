@@ -1,7 +1,10 @@
 import * as THREE from 'three';
-import { CONFIG, createState, step, spawnApple, spawnGiftApple, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateWin, freeCellFor } from './logic.js';
+import { CONFIG, createState, step, spawnApple, spawnGiftApple, spawnGiftApples, plantApples, pullApplesToward, primeBomb, advanceBombs, spawnBombAt, eatBomb, applyGift, chooseMoveDetailed, updateWin, freeCellFor, driftApple, scatterApples } from './logic.js';
 import { APRON, apronPoint, walkStep, faceYaw, clearOf, segmentClear, sceneryLayout } from './apron.js';
+import { ENVIRONMENTS, environmentAt } from './environments.js';
+import { createProp, groundTexture, createAmbient } from './environment-art.js';
 import { normaliseTotals, bumpTotals } from './totals.js';
+import { createTikTokFeed } from './tiktok.js';
 
 const $ = (s) => document.querySelector(s);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -25,9 +28,11 @@ const hud = {
   statLosses: $('#stat-losses'),
   statApples: $('#stat-apples'),
   statBombs: $('#stat-bombs'),
+  statRule: $('#stat-rule'),
   statTheme: $('#stat-theme'),
   themeBtn: $('#stat-theme-btn'),
   toasts: $('#toasts'),
+  dbgToasts: $('#dbg-toasts'),
   log: $('#log'),
   banner: $('#banner'),
   bannerTitle: $('#banner-title'),
@@ -41,7 +46,11 @@ const hud = {
   winLap: $('#dbg-winlap'),
   dbgSound: $('#dbg-sound'),
   dbgGifts: $('#dbg-gifts'),
+  dbgDeck: $('#dbg-deck'),
+  dbgTiktok: $('#dbg-tiktok'),
+  dbgTiktokState: $('#dbg-tiktok-state'),
   dbgSpeed: $('#dbg-speed'),
+  frame: $('.frame'),
 };
 
 // ---------- audio (synthesized, no asset files) ----------
@@ -317,9 +326,9 @@ const bgCtx = bgCanvas.getContext('2d');
 const bgTop = new THREE.Color();
 const bgBottom = new THREE.Color();
 
-function paintBackdrop(hex) {
-  bgTop.set(hex);
-  bgBottom.copy(bgTop).offsetHSL(0, 0, -0.07);
+function paintBackdrop(top, bottom) {
+  bgTop.set(top);
+  bgBottom.set(bottom);
   const grad = bgCtx.createLinearGradient(0, 0, 0, bgCanvas.height);
   grad.addColorStop(0, `#${bgTop.getHexString()}`);
   grad.addColorStop(1, `#${bgBottom.getHexString()}`);
@@ -327,8 +336,8 @@ function paintBackdrop(hex) {
   bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
   bgTex.needsUpdate = true;
 }
-paintBackdrop(0xf7dfe9);
-scene.fog = new THREE.FogExp2(0xf7dfe9, 0.008);
+paintBackdrop(environmentAt(0).sceneTop, environmentAt(0).sceneBottom);
+scene.fog = new THREE.FogExp2(environmentAt(0).sceneBottom, environmentAt(0).fog);
 
 const CAM_FOV = 48;
 // Slight isometric: the camera sits 25° off straight down, on the +Z side, so
@@ -343,7 +352,8 @@ const CAM_UP = new THREE.Vector3(0, Math.sin(CAM_TILT), -Math.cos(CAM_TILT));
 const camera = new THREE.PerspectiveCamera(CAM_FOV, bootSize.w / bootSize.h, 0.1, 240);
 camera.up.set(0, 1, 0);
 
-scene.add(new THREE.AmbientLight(0xfff2df, 0.55));
+const ambientLight = new THREE.AmbientLight(0xfff2df, 0.55);
+scene.add(ambientLight);
 const keyLight = new THREE.DirectionalLight(0xfff0e0, 2.4);
 keyLight.position.set(9, 16, 7);
 scene.add(keyLight);
@@ -353,36 +363,10 @@ scene.add(rimLight);
 
 // ---------- backdrop ----------
 // The tilted view exposes the floor around the board, so the scene rests on a
-// soft dot field plus a contact shadow instead of an empty colour wash.
-function dotFieldTexture() {
-  const size = 1024;
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  const g = canvas.getContext('2d');
-  g.fillStyle = '#fff';
-  for (let y = size / 192; y < size; y += size / 96) {
-    for (let x = size / 192; x < size; x += size / 96) {
-      g.beginPath();
-      g.arc(x, y, 1.6, 0, Math.PI * 2);
-      g.fill();
-    }
-  }
-  // Fade the field out at the edges so the plane never shows a hard border.
-  g.globalCompositeOperation = 'destination-in';
-  const fade = g.createRadialGradient(size / 2, size / 2, size * 0.1, size / 2, size / 2, size * 0.5);
-  fade.addColorStop(0, 'rgba(255,255,255,1)');
-  fade.addColorStop(0.6, 'rgba(255,255,255,0.7)');
-  fade.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = fade;
-  g.fillRect(0, 0, size, size);
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.anisotropy = 4;
-  return tex;
-}
-
+// toon ground texture per environment plus a contact shadow instead of an empty
+// colour wash.
 const groundMat = new THREE.MeshBasicMaterial({
   color: 0xffc9db,
-  map: dotFieldTexture(),
   transparent: true,
   opacity: 0.16,
   depthWrite: false,
@@ -391,6 +375,17 @@ const ground = new THREE.Mesh(new THREE.PlaneGeometry(110, 110), groundMat);
 ground.rotation.x = -Math.PI / 2;
 ground.position.set(12, -0.3, 12.5);
 scene.add(ground);
+
+// The old floor was one un-tiled plane, so this is the board footprint it read
+// against; every other size scales the ground repeat from it.
+const GROUND_REF_W = 12;
+const GROUND_REF_H = 13;
+
+function fitGroundMap() {
+  const map = groundMat.map;
+  if (!map) return;
+  map.repeat.set(state.w / GROUND_REF_W, state.h / GROUND_REF_H);
+}
 
 function softShadowTexture() {
   const size = 256;
@@ -594,8 +589,9 @@ function layoutBoard() {
   boardShadow.scale.set(w + 4, h + 4, 1);
   snapBoard();
   paintChecker();
-  // Scenery first: spectator spawns reject against the props that exist now.
-  layoutScenery();
+  fitGroundMap();
+  // Scenery, ambient and the crowd are placed by applyEnvironment, which owns
+  // the stage; only the crowd is re-fitted here.
   layoutSpectators();
 }
 
@@ -664,7 +660,6 @@ const SMOOTH_CAP = (MAX_SEG + TRAIL_EXTRA) * 4 + 8;
 const smoothA = Array.from({ length: SMOOTH_CAP }, () => new THREE.Vector3());
 const smoothB = Array.from({ length: SMOOTH_CAP }, () => new THREE.Vector3());
 const smoothD = new Float32Array(SMOOTH_CAP);
-const smoothTail = new THREE.Vector3();
 
 // Two cap sections per end, sampled off a hemisphere, so caps read as domes.
 const CAP_D = [0.4, 0.78];
@@ -714,19 +709,10 @@ function rebuildTube(n) {
   for (let i = 1; i < count; i++) {
     smoothD[i] = smoothD[i - 1] + src[i].distanceTo(src[i - 1]);
   }
-  let pathLen = smoothD[count - 1];
-  // Early in a round there may not be enough old tail to pay for the bevels.
-  // Extend the tail straight by the shortfall so the body still cannot shrink.
-  if (pathLen < span) {
-    smoothTail.subVectors(src[count - 1], src[count - 2]);
-    if (smoothTail.lengthSq() < 1e-8) smoothTail.set(0, 0, 1);
-    else smoothTail.normalize();
-    smoothD[count] = span;
-    src[count].copy(src[count - 1]).addScaledVector(smoothTail, span - pathLen);
-    clampToBoard(src[count]);
-    count++;
-    pathLen = span;
-  }
+  // Bevels eat a little path length. Cap to what the trail really has instead of
+  // extending the tail straight, which shot it past the wall when apples were
+  // eaten fast enough to outrun the trail history.
+  const pathLen = smoothD[count - 1];
   const visible = Math.min(span, pathLen);
 
   let j = 0;
@@ -873,142 +859,85 @@ for (const sx of [-0.28, 0.28]) {
 }
 scene.add(eyes);
 
-// ---------- themes ----------
-// Fixed palettes: the HUD vars and the 3D colours move together so a theme swap
-// never leaves neon CSS next to pastel toys.
-const THEMES = [
-  {
-    name: 'Strawberry',
-    css: {
-      cyan: '#5fc9b8', magenta: '#ff8fae', lime: '#8fd06a', orange: '#ff9f6e',
-      blue: '#8fb4ff', violet: '#b99cff', amber: '#f5c25c',
-    },
-    scene: '#f7dfe9', base: '#6b4a63', baseEm: '#7d5573', grid: '#ffc9db',
-    wall: '#ffb3c7', wallEm: '#ff7fa4', post: '#fff4ea', postEm: '#ffc7d8',
-    head: '#5ecfae', accent: '#9be7cf', rim: '#ffb3c9',
-  },
-  {
-    name: 'Matcha',
-    css: {
-      cyan: '#8fbf6a', magenta: '#f2a08a', lime: '#a8d98a', orange: '#f0b26a',
-      blue: '#9fc9a0', violet: '#c3b8e8', amber: '#f5d27a',
-    },
-    scene: '#eef4e4', base: '#4a5a3c', baseEm: '#5a6c48', grid: '#dcefc6',
-    wall: '#b8e39a', wallEm: '#8ac96a', post: '#fbf7e6', postEm: '#d9ecc0',
-    head: '#9ccc6e', accent: '#b8e39a', rim: '#a8d98a',
-  },
-  {
-    name: 'Blueberry',
-    css: {
-      cyan: '#8fa8ff', magenta: '#c39cff', lime: '#a8d9c0', orange: '#ffad8a',
-      blue: '#8fb4ff', violet: '#b99cff', amber: '#f5d27a',
-    },
-    scene: '#e8edfa', base: '#424a6b', baseEm: '#525b80', grid: '#d6e0ff',
-    wall: '#b7c5ff', wallEm: '#8ea4ff', post: '#f8f4ff', postEm: '#d9defc',
-    head: '#8fa8ff', accent: '#b7c5ff', rim: '#c39cff',
-  },
-  {
-    name: 'Mocha',
-    css: {
-      cyan: '#b98a6a', magenta: '#e8a08a', lime: '#b8c98a', orange: '#e0a878',
-      blue: '#b8b0c8', violet: '#c9a7c9', amber: '#f0c888',
-    },
-    scene: '#f5e9dd', base: '#5a4034', baseEm: '#6b4c3d', grid: '#ffe1c2',
-    wall: '#e3bd9a', wallEm: '#c99568', post: '#fff6ea', postEm: '#ecd3b8',
-    head: '#c99062', accent: '#e3bd9a', rim: '#e8a08a',
-  },
-  {
-    name: 'Lavender',
-    css: {
-      cyan: '#9fb4e8', magenta: '#d9a7ff', lime: '#b7d8a8', orange: '#ffb08a',
-      blue: '#9fb4ff', violet: '#c9a7ff', amber: '#f7d08a',
-    },
-    scene: '#efeafb', base: '#4e4266', baseEm: '#5f517a', grid: '#e2d8ff',
-    wall: '#cfc0f5', wallEm: '#a98cf0', post: '#f8f4ff', postEm: '#ded2f8',
-    head: '#a98cf0', accent: '#cfc0f5', rim: '#d9a7ff',
-  },
-  {
-    name: 'Peach',
-    css: {
-      cyan: '#f2b59c', magenta: '#ff9fa8', lime: '#c8d98a', orange: '#ffa070',
-      blue: '#a8bfe8', violet: '#d0a8e0', amber: '#ffc978',
-    },
-    scene: '#fdeee4', base: '#6b4a44', baseEm: '#7d5a52', grid: '#ffd9c4',
-    wall: '#ffbf9f', wallEm: '#ff8f5f', post: '#fff8f0', postEm: '#ffd9bf',
-    head: '#ff9a6a', accent: '#ffd0b8', rim: '#ffb08a',
-  },
-  {
-    name: 'Ocean',
-    css: {
-      cyan: '#5ecbe0', magenta: '#ff9fc4', lime: '#8fd8a8', orange: '#ffb07a',
-      blue: '#6fa8ff', violet: '#a8b8ff', amber: '#ffd27a',
-    },
-    scene: '#e4f3f7', base: '#33505f', baseEm: '#40606f', grid: '#c4eaf2',
-    wall: '#9fdce8', wallEm: '#5fb8d0', post: '#f4fdff', postEm: '#c8eaf2',
-    head: '#3fbfd0', accent: '#9fdce8', rim: '#7fd8e8',
-  },
-  {
-    name: 'Lemon',
-    css: {
-      cyan: '#8fcfa0', magenta: '#ffb0a0', lime: '#ccd95e', orange: '#ffc06a',
-      blue: '#a8c8e8', violet: '#c8b8e0', amber: '#ffd65a',
-    },
-    scene: '#faf7dd', base: '#5f5a34', baseEm: '#6f6a40', grid: '#f0eaa8',
-    wall: '#e8e08a', wallEm: '#c8c05a', post: '#fffdf0', postEm: '#f0eac0',
-    head: '#b8c94a', accent: '#e8e08a', rim: '#d8d070',
-  },
-  {
-    // Dark stream mode: the only palette that also repaints the deck surfaces.
-    name: 'Midnight',
-    dark: true,
-    css: {
-      cyan: '#5ee0d0', magenta: '#ff7fb2', lime: '#a8e07a', orange: '#ffab72',
-      blue: '#8fa8ff', violet: '#c79cff', amber: '#ffd27a',
-    },
-    scene: '#120d16', base: '#2a2233', baseEm: '#332a3e', grid: '#4a3a58',
-    wall: '#3b2f49', wallEm: '#6b4f86', post: '#221a2b', postEm: '#3a2c4a',
-    head: '#6ef0c8', accent: '#35605a', rim: '#b06bff',
-    dots: 0.07,
-  },
-];
+// ---------- environments ----------
+// One staged look per environment: the HUD vars, backdrop, lights, board,
+// ground and apron move together, so a swap never mixes two stages.
+let envIndex = 0;
+const envRootStyle = document.documentElement.style;
 
-let themeIndex = 0;
-const themeRootStyle = document.documentElement.style;
+function applyEnvironment(index) {
+  envIndex = ((index % ENVIRONMENTS.length) + ENVIRONMENTS.length) % ENVIRONMENTS.length;
+  const env = ENVIRONMENTS[envIndex];
 
-function applyTheme(index) {
-  themeIndex = ((index % THEMES.length) + THEMES.length) % THEMES.length;
-  const th = THEMES[themeIndex];
+  // Stage timers belong to the stage they were armed in: drop the pending vine
+  // queue and re-arm every landed apple for the rule the new stage uses.
+  vineQueue.length = 0;
+  for (const a of state.apples) {
+    if (a.dropAt != null) continue;
+    a.expiresAt = null;
+    a.stageAt = null;
+    armStageApple(a, env.appleRule);
+  }
 
-  for (const key of Object.keys(th.css)) themeRootStyle.setProperty(`--${key}`, th.css[key]);
+  for (const key of Object.keys(env.css)) envRootStyle.setProperty(`--${key}`, env.css[key]);
   // Surface overrides live in index.html so the stylesheet stays the source of
-  // truth; the attribute swaps them all at once and light themes drop it.
-  if (th.dark) document.documentElement.setAttribute('data-theme', 'dark');
+  // truth; the attribute swaps them all at once and light stages drop it.
+  if (env.dark) document.documentElement.setAttribute('data-theme', 'dark');
   else document.documentElement.removeAttribute('data-theme');
 
-  paintBackdrop(th.scene);
-  scene.fog.color.set(th.scene);
+  paintBackdrop(env.sceneTop, env.sceneBottom);
+  scene.fog.color.set(env.sceneBottom);
+  scene.fog.density = env.fog;
 
-  baseMat.color.set(th.base);
-  baseMat.emissive.set(th.baseEm);
-  gridMat.color.set(th.grid);
-  groundMat.color.set(th.wallEm);
-  groundMat.opacity = th.dots ?? 0.16;
+  ambientLight.color.set(env.ambientLight);
+  ambientLight.intensity = env.ambientIntensity;
+  keyLight.color.set(env.keyLight);
+  keyLight.intensity = env.keyIntensity;
+  rimLight.color.set(env.rim);
 
-  wallMat.color.set(th.wall);
-  wallMat.emissive.set(th.wallEm);
-  postMat.color.set(th.post);
-  postMat.emissive.set(th.postEm);
+  baseMat.color.set(env.base);
+  baseMat.emissive.set(env.baseEm);
+  gridMat.color.set(env.grid);
 
-  snakeMesh.material.color.set(th.head);
-  rimLight.color.set(th.rim);
+  // The ground map belongs to the stage that made it: drop the old texture
+  // before handing the material a new one.
+  groundMat.map?.dispose();
+  groundMat.map = groundTexture(env.ground);
+  fitGroundMap();
+  groundMat.color.set(env.groundTint ?? env.wallEm);
+  groundMat.opacity = env.dots ?? 0.16;
+
+  wallMat.color.set(env.wall);
+  wallMat.emissive.set(env.wallEm);
+  postMat.color.set(env.post);
+  postMat.emissive.set(env.postEm);
+
+  snakeMesh.material.color.set(env.head);
 
   paintChecker();
-  bodyCells.material.color.set(th.accent);
-  headCell.material.color.set(th.accent);
+  bodyCells.material.color.set(env.accent);
+  headCell.material.color.set(env.accent);
 
-  if (hud.statTheme) hud.statTheme.textContent = th.name.toUpperCase();
-  // The static aria-label would otherwise hide the visible palette name from assistive tech.
-  hud.themeBtn?.setAttribute('aria-label', `Change theme, current: ${th.name}`);
+  // Gift skins follow the stage: fruit tint plus bomb shell and fuse spark.
+  appleMat.color.set(env.apple);
+  appleMat.emissive.set(env.appleEm);
+  bombMat.color.set(env.bomb);
+  bombMat.emissive.set(env.bombEm);
+  sparkMat.color.set(env.spark);
+
+  if (hud.statTheme) hud.statTheme.textContent = env.name.toUpperCase();
+  if (hud.statRule) {
+    hud.statRule.textContent = `${env.appleLabel} · ${env.bombLabel}`;
+    hud.statRule.title = `Apple: ${env.appleLabel}. Bomb: ${env.bombLabel}.`;
+  }
+  // The static aria-label would otherwise hide the visible stage name from assistive tech.
+  hud.themeBtn?.setAttribute('aria-label', `Change environment, current: ${env.name}. ${env.appleLabel}, ${env.bombLabel}`);
+
+  // Props belong to the stage too, so the apron ring is rebuilt, not recoloured.
+  // Scenery first: spectator spawns reject against the props that exist now.
+  layoutScenery();
+  layoutAmbient();
+  layoutSpectators();
 }
 
 // apples
@@ -1068,7 +997,9 @@ function makeBombMesh() {
 // One actor per apple batch: bird fly-by, parachute, UFO beam, meteor shower.
 const dropActors = [];
 const appleBatches = new Map();
+const vineQueue = [];
 const APPLE_BATCH_MS = 450;
+const FADE_SECONDS = 7;
 let lastViewer = null;
 
 const birdBodyMat = new THREE.MeshStandardMaterial({
@@ -1207,6 +1138,8 @@ function flyBombToMouth(cell) {
   dropActors.push({
     group: mesh,
     update(dt) {
+      // The round can end mid-flight; nothing detonates after that.
+      if (state.dead || state.won) return true;
       t += dt / 0.45;
       const head = state.snake[0];
       to.set(head.x + 0.5, 0.55, head.y + 0.5);
@@ -1233,8 +1166,16 @@ function landBomb(cell) {
   // Prefer the board over the snake: a bomb aimed at a body cell moves to a free
   // cell while one exists. Only a board with nowhere left sends it into the mouth.
   const onSnake = state.snake.some((s) => s.x === cell.x && s.y === cell.y);
-  const spot = onSnake ? freeCellFor(state) : cell;
-  if (spot && spawnBombAt(state, spot)) {
+  let spot = onSnake ? freeCellFor(state) : cell;
+  let bomb = spot ? spawnBombAt(state, spot) : null;
+  // An apple can take the target cell while the bomb falls: try one free cell
+  // before the bomb is sent to the mouth instead.
+  if (!bomb && !onSnake && state.bombs.length < CONFIG.maxBombs) {
+    spot = freeCellFor(state);
+    bomb = spot ? spawnBombAt(state, spot) : null;
+  }
+  if (bomb) {
+    primeBomb(bomb, environmentAt(envIndex).bombRule, state.dir);
     camPunch += 0.15;
     return;
   }
@@ -1871,89 +1812,49 @@ function updateSpectators(dt) {
 }
 
 // ---------- scenery props ----------
-// Static dressing on the apron: bushes, rocks, flowers and crates so the rim
-// reads as a place instead of empty stage. The layout is pure (see apron.js) and
-// stays outside the wall, so every board resize simply rebuilds the ring.
+// Static dressing on the apron: each environment names its own prop kinds, so
+// the rim reads as a place instead of empty stage. The layout is pure (see
+// apron.js) and stays outside the wall, so every board layout rebuilds the ring.
 const sceneryGroup = new THREE.Group();
 scene.add(sceneryGroup);
 
-const bushGeo = new THREE.IcosahedronGeometry(0.29, 0);
-const bushMat = new THREE.MeshToonMaterial({ color: 0x9ed07a, gradientMap: toonRamp });
-const rockGeo = new THREE.DodecahedronGeometry(0.3, 0);
-const rockMat = new THREE.MeshToonMaterial({ color: 0xbfb3cc, gradientMap: toonRamp });
-const flowerStemGeo = new THREE.CylinderGeometry(0.022, 0.022, 0.42, 5);
-const flowerStemMat = new THREE.MeshToonMaterial({ color: 0x8fc98a, gradientMap: toonRamp });
-const flowerHeadGeo = new THREE.SphereGeometry(0.12, 10, 8);
-const flowerHeadMat = new THREE.MeshToonMaterial({ color: 0xff9fc0, gradientMap: toonRamp });
-const crateGeo = new THREE.BoxGeometry(0.46, 0.4, 0.46);
-const cratePostGeo = new THREE.BoxGeometry(0.075, 0.44, 0.075);
-const crateMat = new THREE.MeshToonMaterial({ color: 0xd9a56d, gradientMap: toonRamp });
-const cratePostMat = new THREE.MeshToonMaterial({ color: 0xc28a52, gradientMap: toonRamp });
-
-// Three overlapping lobes: cheaper than a sculpt and reads as a bush from above.
-function makeBush() {
-  const g = new THREE.Group();
-  const lobes = [[0, 0.22, 0, 1], [-0.17, 0.16, 0.09, 0.72], [0.15, 0.18, -0.08, 0.64]];
-  for (const [x, y, z, s] of lobes) {
-    const lobe = new THREE.Mesh(bushGeo, bushMat);
-    lobe.position.set(x, y, z);
-    lobe.scale.set(s, s * 0.84, s);
-    g.add(lobe);
-  }
-  return g;
-}
-
-function makeRock() {
-  const g = new THREE.Group();
-  const rock = new THREE.Mesh(rockGeo, rockMat);
-  rock.position.y = 0.17;
-  rock.scale.set(1, 0.72, 0.9);
-  rock.rotation.y = 0.6;
-  g.add(rock);
-  return g;
-}
-
-function makeFlower() {
-  const g = new THREE.Group();
-  const stem = new THREE.Mesh(flowerStemGeo, flowerStemMat);
-  stem.position.y = 0.21;
-  g.add(stem);
-  const head = new THREE.Mesh(flowerHeadGeo, flowerHeadMat);
-  head.position.y = 0.46;
-  g.add(head);
-  return g;
-}
-
-// Corner posts soften the box silhouette into something closer to a rounded crate.
-function makeCrate() {
-  const g = new THREE.Group();
-  const box = new THREE.Mesh(crateGeo, crateMat);
-  box.position.y = 0.2;
-  g.add(box);
-  for (const sx of [-1, 1]) {
-    for (const sz of [-1, 1]) {
-      const post = new THREE.Mesh(cratePostGeo, cratePostMat);
-      post.position.set(sx * 0.2, 0.22, sz * 0.2);
-      g.add(post);
-    }
-  }
-  return g;
-}
-
-const PROP_FACTORIES = { bush: makeBush, rock: makeRock, flower: makeFlower, crate: makeCrate };
-
 function layoutScenery() {
-  // Geometry and materials are shared by every prop, so a rebuild drops the
+  // createProp shares its geometry and materials, so the rebuild drops the old
   // groups only and never disposes them.
   sceneryGroup.clear();
-  for (const item of sceneryLayout(state.w, state.h)) {
-    const prop = PROP_FACTORIES[item.kind]();
+  const env = environmentAt(envIndex);
+  for (const item of sceneryLayout(state.w, state.h, Math.random, 14, env.props)) {
+    const prop = createProp(item.kind);
     prop.position.set(item.x, 0, item.z);
     prop.rotation.y = item.rot;
     prop.scale.setScalar(item.scale * 1.25);
     prop.userData.kind = item.kind;
+    // A prop wider than the apron margin can cross the wall: push it outward on
+    // the side it stands on, never toward the board. One Box3 per prop, at build
+    // time only.
+    prop.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(prop);
+    if (prop.position.x <= 0 && box.max.x > 0) prop.position.x -= box.max.x + 0.04;
+    if (prop.position.x >= state.w && box.min.x < state.w) prop.position.x += state.w - box.min.x + 0.04;
+    if (prop.position.z <= 0 && box.max.z > 0) prop.position.z -= box.max.z + 0.04;
+    if (prop.position.z >= state.h && box.min.z < state.h) prop.position.z += state.h - box.min.z + 0.04;
     sceneryGroup.add(prop);
   }
+}
+
+// One cheap motion layer per environment: waves, corner flags, torches,
+// fireflies or a planet. Rebuilt on an env swap and on board growth so it
+// always fits the current apron.
+let ambient = null;
+
+function layoutAmbient() {
+  if (ambient) {
+    scene.remove(ambient.group);
+    ambient.dispose();
+    ambient = null;
+  }
+  ambient = createAmbient(environmentAt(envIndex).ambient, state.w, state.h);
+  scene.add(ambient.group);
 }
 
 // Every apple and bomb gift is now a crowd throw; the older flying deliveries
@@ -1973,13 +1874,15 @@ function startDrop(items, variant, kind = 'apple', viewer = null) {
 
 // Every apple and bomb gift is now a crowd throw; the older flying deliveries
 // stay in the file as spares and can be re-enabled from here.
-function nextDropVariant() {
-  return 'thrower';
+// Every stage names its own delivery actor: gulls on the beach, meteor strikes
+// on the pitch, trapdoors in the dungeon, a gardener, or a UFO in orbit.
+function nextDropVariant(kind = 'apple') {
+  return environmentAt(envIndex).drops?.[kind] || 'thrower';
 }
 
-function queueAppleGift() {
+function queueAppleGift(from = null) {
   // Treat rapid taps as one viewer spamming the same gift.
-  const viewer = lastViewer && Math.random() < 0.68 ? lastViewer : pick(VIEWERS);
+  const viewer = from || (lastViewer && Math.random() < 0.68 ? lastViewer : pick(VIEWERS));
   lastViewer = viewer;
   let b = appleBatches.get(viewer);
   if (!b) {
@@ -1997,13 +1900,29 @@ function flushAppleBatch(viewer) {
   if (state.dead || state.won) return;
 
   // Gift apples may take the tail cell when the board is full; procedural
-  // apples never do.
+  // apples never do. The stage rule can return more than one apple per gift.
+  const env = environmentAt(envIndex);
   const apples = [];
   for (let i = 0; i < b.count; i++) {
-    const a = spawnGiftApple(state);
-    if (!a) break;
-    a.dropAt = Number.POSITIVE_INFINITY;
-    apples.push(a);
+    const batch = spawnGiftApples(state, env.appleRule);
+    if (!batch.length) break;
+    for (const a of batch) {
+      a.dropAt = Number.POSITIVE_INFINITY;
+      a.gift = true;
+      apples.push(a);
+    }
+  }
+  if (state.dead) {
+    // The drop had nowhere to land: the tail folded onto the head, so the round
+    // ends as a tail crash instead of the snake quietly losing a segment.
+    // Apples already spawned into this batch would sit on the board invisible.
+    for (const a of apples) {
+      const i = state.apples.indexOf(a);
+      if (i !== -1) state.apples.splice(i, 1);
+    }
+    toast('🍎 Tail crash — no free cell for the drop', 'bad');
+    onDeath();
+    return;
   }
   if (!apples.length) {
     sfx.error();
@@ -2011,14 +1930,15 @@ function flushAppleBatch(viewer) {
     return;
   }
 
-  startDrop(apples, nextDropVariant(), 'apple', viewer);
+  startDrop(apples, nextDropVariant('apple'), 'apple', viewer);
   sfx.gift('apple');
   camPunch += 0.5;
   flash('#9dff3d');
   const label = apples.length > 1 ? `${apples.length} apples` : '1 apple';
   toast(`🍎 <b>@${viewer}</b> dropped ${label}`, 'good');
-  logGift('apple', viewer, apples.length);
-  countGift(viewer, 'apple', apples.length);
+  // One gift pays once, even when the stage rule spawns a pair or a twin.
+  logGift('apple', viewer, b.count);
+  countGift(viewer, 'apple', b.count);
 }
 
 // particles
@@ -2174,6 +2094,56 @@ function bombDebris(segments) {
   particleMesh.instanceColor.needsUpdate = true;
 }
 
+// Every bomb burst goes through here: mouth, kick, tide or barrel. Stage
+// extras read the bomb's own rule, which survives an environment change.
+function detonateVisual(bomb, removed, at) {
+  sfx.explode();
+  countEaten('bombs');
+  removeBombMesh(bomb);
+  setWorld(at, tmpVec);
+  tmpVec.y = 0.62;
+  burst(tmpVec, BURST.bomb, { count: 30, power: 1.4 });
+  // The bitten-off tail blows apart where it was.
+  bombDebris(removed || []);
+  shakeMag = Math.max(shakeMag, 0.4);
+  flash('#ff8a3d', '55');
+
+  if (bomb.rule === 'compost') {
+    const grown = plantApples(state, at, 2);
+    for (const a of grown) a.dropAt = clock + 0.25;
+    tmpVec.set(at.x + 0.5, 0.5, at.y + 0.5);
+    burst(tmpVec, BURST.apple, { count: 10, power: 1.4, color: 0x6dff5a });
+    if (grown.length) toast(`🪴 Compost sprouted ${grown.length} apples`, 'good');
+  } else if (bomb.rule === 'gravity') {
+    pullApplesToward(state, at);
+    tmpVec.set(at.x + 0.5, 0.5, at.y + 0.5);
+    burst(tmpVec, BURST.speed, { count: 12, power: 1.1, color: 0x39f6ff });
+    toast('🕳️ Gravity pulled the apples', 'good');
+  } else if (bomb.rule === 'erupt') {
+    // Cap or a full board just means the eruption fizzles out silently.
+    const spot = freeCellFor(state);
+    const next = spot ? spawnBombAt(state, spot) : null;
+    if (next) {
+      primeBomb(next, 'static', state.dir);
+      tmpVec.set(spot.x + 0.5, 0.4, spot.y + 0.5);
+      burst(tmpVec, BURST.bomb, { count: 10, power: 1.2, life: 0.7 });
+      toast('🌋 The eruption spat out another bomb', 'bad');
+    }
+  } else if (bomb.rule === 'freeze') {
+    state.tickMs = Math.min(CONFIG.maxTick, state.tickMs + CONFIG.slowStep);
+    setWorld(state.snake[0] || at, tmpVec);
+    tmpVec.y = 0.6;
+    burst(tmpVec, BURST.speed, { count: 22, power: 1.1, color: 0xe8ffff });
+    toast(`❄️ Freeze bomb → ${(1000 / state.tickMs).toFixed(1)} cells/s`, 'good');
+  } else if (bomb.rule === 'emp') {
+    const moved = scatterApples(state);
+    tmpVec.set(at.x + 0.5, 0.5, at.y + 0.5);
+    burst(tmpVec, BURST.eat, { count: 24, power: 1.4, color: 0xff4de0 });
+    burst(tmpVec, BURST.speed, { count: 24, power: 1.4, color: 0x5ffcff });
+    toast(`⚡ EMP scrambled ${moved} apples`, 'good');
+  }
+}
+
 function hideParticles() {
   for (let i = 0; i < P_MAX; i++) {
     const p = particles[i];
@@ -2241,21 +2211,47 @@ const debugPrefs = (() => {
     return {
       winLap: raw.winLap !== false,
       gifts: !!raw.gifts,
+      deck: !!raw.deck,
+      toasts: raw.toasts !== false,
+      tiktok: !!raw.tiktok,
       speed: Number(raw.speed) || 1,
     };
   } catch (e) {
-    return { winLap: true, gifts: false, speed: 1 };
+    return { winLap: true, gifts: false, deck: false, toasts: true, tiktok: false, speed: 1 };
   }
 })();
 victoryLap = debugPrefs.winLap;
 simGifts = debugPrefs.gifts;
+let deckShown = debugPrefs.deck;
+let toastsOn = debugPrefs.toasts;
+let tiktokOn = debugPrefs.tiktok;
 debugSpeed = Math.max(1, debugPrefs.speed);
+
+function applyToasts(force) {
+  toastsOn = force != null ? force : toastsOn;
+  hud.toasts.hidden = !toastsOn;
+  hud.dbgToasts.checked = toastsOn;
+  if (!toastsOn) hud.toasts.replaceChildren();
+}
+
+function applyDeck(force) {
+  deckShown = force != null ? force : deckShown;
+  hud.frame.classList.toggle('show-deck', deckShown);
+  hud.dbgDeck.checked = deckShown;
+}
 
 function saveDebug() {
   try {
     localStorage.setItem(
       DEBUG_KEY,
-      JSON.stringify({ winLap: victoryLap, gifts: simGifts, speed: debugSpeed })
+      JSON.stringify({
+        winLap: victoryLap,
+        gifts: simGifts,
+        deck: deckShown,
+        toasts: toastsOn,
+        tiktok: tiktokOn,
+        speed: debugSpeed,
+      })
     );
   } catch (e) {
     // Private-mode storage failures must not break the stream.
@@ -2308,9 +2304,9 @@ function setWorld(p, out) {
   return out.set(p.x + 0.5, SNAKE_Y, p.y + 0.5);
 }
 
-// Rendering-only clamp: the trail can carry an extrapolated tail cell, and the
-// tube payback can extend a tail past a wall. Keeping the centreline at least
-// half a cell inside keeps the 0.45 radius tube off the wall.
+// Rendering-only clamp: an extrapolated or interpolated trail point can sit on
+// the board border. Keeping the centreline at least half a cell inside keeps
+// the 0.45 radius tube off the wall.
 function clampToBoard(p) {
   p.x = Math.min(state.w - 0.5, Math.max(0.5, p.x));
   p.z = Math.min(state.h - 0.5, Math.max(0.5, p.z));
@@ -2325,7 +2321,8 @@ function resetTrail() {
   if (n) {
     const tail = trail[n - 1];
     const prev = trail[n - 2] || tail;
-    trail.push({ x: tail.x + tail.x - prev.x, y: tail.y + tail.y - prev.y });
+    const ext = { x: tail.x + tail.x - prev.x, y: tail.y + tail.y - prev.y };
+    if (ext.x >= 0 && ext.x < state.w && ext.y >= 0 && ext.y < state.h) trail.push(ext);
   }
   visualP = 1;
 }
@@ -2345,7 +2342,7 @@ function pushTrail() {
   }
   const want = Math.min(MAX_SEG + 1 + TRAIL_EXTRA, snake.length + 1 + TRAIL_EXTRA);
   while (trail.length > want) trail.pop();
-  if (trail.length <= snake.length) resetTrail();
+  if (trail.length < snake.length) resetTrail();
 }
 
 function sampleTrail(d, out) {
@@ -2376,7 +2373,7 @@ function syncSnake(dt) {
   else if (snake.length && (trail[0].x !== snake[0].x || trail[0].y !== snake[0].y)) pushTrail();
   const want = Math.min(MAX_SEG + 1 + TRAIL_EXTRA, snake.length + 1 + TRAIL_EXTRA);
   while (trail.length > want) trail.pop();
-  if (trail.length <= snake.length) resetTrail();
+  if (trail.length < snake.length) resetTrail();
 
   // Logical ticks jump one cell; visualP slides the body along the trail
   // between them so spacing stays exactly one cell through corners.
@@ -2443,6 +2440,23 @@ function removeAppleMesh(a) {
   a.mesh = null;
 }
 
+// Stage timers are armed when an apple lands and re-armed on every environment
+// swap, so a timer never survives into a stage that does not use it.
+function armStageApple(a, rule) {
+  if (rule === 'fade') {
+    if (a.expiresAt == null) a.expiresAt = clock + FADE_SECONDS;
+  } else if (rule === 'drift') {
+    a.stageAt = clock + 1.8;
+  } else if (rule === 'blink') {
+    a.stageAt = clock + 4;
+  } else if (rule === 'vine') {
+    if (a.gift && !a.vinePlanned && a.dropAt == null) {
+      a.vinePlanned = true;
+      vineQueue.push({ at: clock + 2.2, x: a.x, y: a.y });
+    }
+  }
+}
+
 function syncApples(dt) {
   for (const a of state.apples) {
     let mesh = a.mesh;
@@ -2454,6 +2468,11 @@ function syncApples(dt) {
       a.mesh = mesh;
       appleMeshes.push(mesh);
       scene.add(mesh);
+      // Procedural fruit skips the drop branch, so it takes its fade window here.
+      if (a.dropAt == null && a.expiresAt == null
+        && environmentAt(envIndex).appleRule === 'fade') {
+        a.expiresAt = clock + FADE_SECONDS;
+      }
     }
     setWorld(a, tmpVec);
     mesh.position.set(tmpVec.x, 0.06 + Math.sin(clock * 3 + mesh.userData.seed) * 0.07, tmpVec.z);
@@ -2468,10 +2487,76 @@ function syncApples(dt) {
       a.dropAt = null;
       mesh.visible = true;
       mesh.userData.born = clock;
+      armStageApple(a, environmentAt(envIndex).appleRule);
     }
     const age = clock - mesh.userData.born;
     const pop = age < 0.32 ? Math.max(0.01, easeOutBack(age / 0.32)) : 1;
     mesh.scale.setScalar(pop);
+  }
+}
+
+// Stage lifetimes: dungeon fruit fades out after its window, garden gift fruit
+// plants one new apple next to where it sat. One rule runs per stage so they
+// never fight over the same apple.
+function updateStageApples() {
+  for (let i = state.apples.length - 1; i >= 0; i--) {
+    const a = state.apples[i];
+    if (a.expiresAt == null || a.expiresAt > clock) continue;
+    state.apples.splice(i, 1);
+    removeAppleMesh(a);
+    setWorld(a, tmpVec);
+    tmpVec.y = 0.3;
+    burst(tmpVec, BURST.apple, { count: 6, power: 1.1, life: 0.5 });
+  }
+
+  const rule = environmentAt(envIndex).appleRule;
+  if (rule === 'vine') {
+    while (vineQueue.length && vineQueue[0].at <= clock) {
+      const q = vineQueue.shift();
+      if (state.dead || state.won) continue;
+      const grown = plantApples(state, { x: q.x, y: q.y }, 1);
+      for (const a of grown) a.dropAt = clock + 0.45;
+      tmpVec.set(q.x + 0.5, 0.35, q.y + 0.5);
+      burst(tmpVec, BURST.apple, { count: 8, power: 1.2, color: 0xa6ff4a });
+    }
+    return;
+  }
+
+  // drift and blink only touch apples that have landed, and only while live.
+  if (state.dead || state.won) return;
+  if (rule === 'drift') {
+    for (const a of state.apples) {
+      if (a.dropAt != null) continue;
+      if (a.stageAt == null) {
+        a.stageAt = clock + 1.8;
+        continue;
+      }
+      if (a.stageAt > clock) continue;
+      if (driftApple(state, a)) {
+        tmpVec.set(a.x + 0.5, 0.3, a.y + 0.5);
+        burst(tmpVec, BURST.bomb, { count: 6, power: 0.9, life: 0.5 });
+      }
+      a.stageAt = clock + 1.8;
+    }
+  } else if (rule === 'blink') {
+    for (const a of state.apples) {
+      if (a.dropAt != null) continue;
+      if (a.stageAt == null) {
+        a.stageAt = clock + 4;
+        continue;
+      }
+      if (a.stageAt > clock) continue;
+      const spot = freeCellFor(state);
+      if (spot && (spot.x !== a.x || spot.y !== a.y)) {
+        tmpVec.set(a.x + 0.5, 0.3, a.y + 0.5);
+        burst(tmpVec, BURST.eat, { count: 6, power: 0.9, color: 0xff4de0, life: 0.5 });
+        a.x = spot.x;
+        a.y = spot.y;
+        tmpVec.set(a.x + 0.5, 0.3, a.y + 0.5);
+        burst(tmpVec, BURST.speed, { count: 6, power: 0.9, color: 0x5ffcff, life: 0.5 });
+      }
+      a.stageAt = clock + 4;
+    }
   }
 }
 
@@ -2579,6 +2664,7 @@ function countEaten(field) {
 }
 
 function toast(html, kind = '') {
+  if (!toastsOn) return;
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
   el.innerHTML = html;
@@ -2760,7 +2846,7 @@ function fovPunch(v) {
   fovKick = Math.max(-6, Math.min(6, fovKick + v));
 }
 
-function sendGift(type) {
+function sendGift(type, from = null) {
   if (state.dead || state.won) {
     sfx.error();
     toast('Round over — press <b>R</b> to restart', 'bad');
@@ -2770,11 +2856,11 @@ function sendGift(type) {
   if (!gift) return;
 
   if (type === 'apple') {
-    queueAppleGift();
+    queueAppleGift(from);
     return;
   }
 
-  const viewer = lastViewer && Math.random() < 0.68 ? lastViewer : pick(VIEWERS);
+  const viewer = from || (lastViewer && Math.random() < 0.68 ? lastViewer : pick(VIEWERS));
   lastViewer = viewer;
 
   // Growth reshapes the whole board, so it cannot happen under a running body:
@@ -2804,7 +2890,7 @@ function sendGift(type) {
       return;
     }
     sfx.gift(type);
-    startDrop([ev.cell], nextDropVariant(), 'bomb', viewer);
+    startDrop([ev.cell], nextDropVariant('bomb'), 'bomb', viewer);
     camPunch += 0.5;
     shakeMag = Math.max(shakeMag, 0.25);
     flash('#ff8a3d', '33');
@@ -2839,6 +2925,46 @@ function sendGift(type) {
   }
 
 }
+
+// ---------- TikTok gift feed ----------
+// The bridge caps its own batch size, so a spam burst arrives as one callback
+// with a count. Viewer names from TikTok are passed through untouched.
+const feed = createTikTokFeed({
+  onGift(effect, viewerName, count) {
+    for (let i = 0; i < count; i++) sendGift(effect, viewerName);
+  },
+  onStatus() {
+    paintTikTok();
+  },
+});
+
+// Same text in the chip and its title: the chip is narrow and can clip.
+function paintTikTok() {
+  const bridge = feed.status() || {};
+  const label = !tiktokOn
+    ? 'off'
+    : bridge.state === 'connecting'
+      ? 'connecting…'
+      : bridge.state === 'live'
+        ? 'live'
+        : 'offline';
+  const text = bridge.ignored > 0 ? `${label} · ignored ${bridge.ignored}` : label;
+  hud.dbgTiktokState.textContent = text;
+  hud.dbgTiktokState.title = text;
+}
+
+function applyTikTok(force) {
+  tiktokOn = force != null ? force : tiktokOn;
+  feed.setEnabled(tiktokOn);
+  hud.dbgTiktok.checked = tiktokOn;
+  paintTikTok();
+}
+
+// Unmapped gift ids land here; the table gives the streamer something to copy.
+hud.dbgTiktokState.addEventListener('click', () => {
+  const unknown = feed.unknown();
+  if (Array.isArray(unknown) ? unknown.length : unknown) console.table(unknown);
+});
 
 // ---------- lifecycle ----------
 function onDeath() {
@@ -2919,6 +3045,7 @@ function reset(keepGrowth = false) {
   lastViewer = null;
   for (const b of appleBatches.values()) clearTimeout(b.timer);
   appleBatches.clear();
+  vineQueue.length = 0;
   for (const act of dropActors) scene.remove(act.group);
   dropActors.length = 0;
   for (const f of winFx) f.active = false;
@@ -2935,8 +3062,8 @@ function reset(keepGrowth = false) {
   hideBanner();
   hud.flash.classList.remove('on');
   layoutBoard();
-  // Every new round advances the palette; boot does not call reset, so round one stays on theme 0.
-  applyTheme(themeIndex + 1);
+  // Every new round advances the environment; boot does not call reset, so round one stays on the first one.
+  applyEnvironment(envIndex + 1);
   camDist = fitDistance();
   camTarget.set(state.w / 2, 0, state.h / 2);
   camBase.copy(CAM_DIR).multiplyScalar(camDist).add(camTarget);
@@ -2970,6 +3097,7 @@ function frame(ms) {
   last = ms;
   const dt = raw > 0 ? Math.min(0.05, raw) : 0;
   clock += dt;
+  ambient?.update(clock);
 
   const win = updateWin(state, dt * 1000);
   if (win.won) {
@@ -3016,23 +3144,15 @@ function frame(ms) {
         tmpVec.y = 0.62;
         burst(tmpVec, BURST.eat);
       }
-      if (res.bomb) {
-        sfx.explode();
-        countEaten('bombs');
-        removeBombMesh(res.bomb);
-        setWorld(res.bomb, tmpVec);
-        tmpVec.y = 0.62;
-        burst(tmpVec, BURST.bomb, { count: 30, power: 1.4 });
-        // The bitten-off tail blows apart where it was.
-        bombDebris(res.removed || []);
-        shakeMag = Math.max(shakeMag, 0.4);
-        flash('#ff8a3d', '55');
-      }
+      if (res.bomb) detonateVisual(res.bomb, res.removed, res.bomb);
       if (res.died) onDeath();
       if (state.dead || state.won) {
         acc = 0;
         break;
       }
+      // Stage bombs move with the logic tick, never per frame. advanceBombs
+      // already takes the bomb off the board, so nothing is counted twice.
+      for (const ev of advanceBombs(state)) detonateVisual(ev.bomb, ev.removed, ev.at);
     }
 
     appleClock += dt * 1000 * debugSpeed;
@@ -3051,6 +3171,7 @@ function frame(ms) {
   updateSpectators(dt);
   syncSnake(dt);
   syncApples(dt);
+  updateStageApples();
   syncBombs(dt);
   updateCamera(dt);
   updateParticles(dt);
@@ -3076,7 +3197,7 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === 'r' || e.key === 'R') {
     reset();
   } else if (e.key === 't' || e.key === 'T') {
-    applyTheme(themeIndex + 1);
+    applyEnvironment(envIndex + 1);
   } else if (e.key === 'd' || e.key === 'D') {
     toggleDebug();
   }
@@ -3084,10 +3205,10 @@ window.addEventListener('keydown', (e) => {
 
 window.addEventListener('pointerdown', unlockAudio, { once: true });
 
-// The palette chip sits inside .stage-hud (pointer-events: none), so it opts back in itself.
+// The environment chip sits inside .stage-hud (pointer-events: none), so it opts back in itself.
 hud.themeBtn?.addEventListener('click', () => {
   unlockAudio();
-  applyTheme(themeIndex + 1);
+  applyEnvironment(envIndex + 1);
 });
 
 hud.winLap.addEventListener('change', () => {
@@ -3108,6 +3229,21 @@ hud.dbgSound.addEventListener('change', () => {
 hud.dbgGifts.addEventListener('change', () => {
   simGifts = hud.dbgGifts.checked;
   giftClock = 0;
+  saveDebug();
+});
+
+hud.dbgDeck.addEventListener('change', () => {
+  applyDeck(hud.dbgDeck.checked);
+  saveDebug();
+});
+
+hud.dbgToasts.addEventListener('change', () => {
+  applyToasts(hud.dbgToasts.checked);
+  saveDebug();
+});
+
+hud.dbgTiktok.addEventListener('change', () => {
+  applyTikTok(hud.dbgTiktok.checked);
   saveDebug();
 });
 
@@ -3133,7 +3269,7 @@ window.addEventListener('resize', resize);
 if (window.ResizeObserver) new ResizeObserver(resize).observe(stageEl);
 
 // ---------- boot ----------
-applyTheme(0);
+applyEnvironment(0);
 layoutBoard();
 renderTotals();
 renderLeaderboard();
@@ -3141,6 +3277,9 @@ refreshRecord();
 hud.dbgSound.checked = soundOn;
 hud.winLap.checked = victoryLap;
 hud.dbgGifts.checked = simGifts;
+applyDeck();
+applyToasts();
+applyTikTok();
 hud.dbgSpeed.value = String(debugSpeed);
 applyDebug();
 hideParticles();
@@ -3155,5 +3294,6 @@ camLook.copy(camTarget);
 camera.position.copy(camBase);
 camera.lookAt(camLook);
 
-window.__snake = { scene, camera, renderer, sendGift, reset, state: () => state };
+// `setEnvironment(index)` is the test hook: same path as the `T` key and the chip.
+window.__snake = { scene, camera, renderer, sendGift, reset, state: () => state, setEnvironment: applyEnvironment };
 requestAnimationFrame(frame);

@@ -430,7 +430,7 @@ test('spawning fails when the board is full', () => {
   assert.equal(spawnApple(state), null);
 });
 
-test('a gift apple takes the tail cell when the board is full', () => {
+test('a gift apple crashes the round when the board is blocked but not full', () => {
   const state = createState(() => 0.5);
   state.w = 2;
   state.h = 3;
@@ -445,14 +445,13 @@ test('a gift apple takes the tail cell when the board is full', () => {
   state.bombs = [];
   state.dir = { x: 0, y: 1 };
   state.lastMove = { x: 0, y: 1 };
-  const tail = { ...state.snake[state.snake.length - 1] };
 
   const apple = spawnGiftApple(state);
-  assert.ok(apple);
-  assert.equal(apple.x, tail.x);
-  assert.equal(apple.y, tail.y);
-  assert.equal(state.snake.length, 4);
-  assert.equal(state.apples.length, 2);
+  assert.equal(apple, null);
+  assert.equal(state.dead, true);
+  assert.equal(state.deathReason, 'tail');
+  assert.equal(state.snake.length, 5);
+  assert.equal(state.apples.length, 1);
 });
 
 test('procedural apples wait for a free cell and then resume', () => {

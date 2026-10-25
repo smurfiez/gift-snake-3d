@@ -570,8 +570,10 @@ export function spawnApple(state) {
   return placeApple(state, free[Math.floor(rand() * free.length)]);
 }
 
-// Gift apples are never refused: with no free cell the apple takes the tail, so
-// the snake shortens by one and the drop still lands.
+// Gift apples are never refused on a filled board: the apple takes the tail, so
+// the snake shortens by one and the drop still lands. On a board that is only
+// blocked by apples or bombs, taking the tail would fold the body onto its own
+// head, so the drop ends the round as a tail crash.
 export function spawnGiftApple(state) {
   const rand = state.rand ?? Math.random;
   const ahead = upcomingCells(state, 8);
@@ -579,8 +581,160 @@ export function spawnGiftApple(state) {
 
   const free = freeCells(state);
   if (free.length) return placeApple(state, free[Math.floor(rand() * free.length)]);
-  if (state.snake.length <= CONFIG.minLength) return null;
-  return placeApple(state, state.snake.pop());
+  if (state.filled || state.snake.length >= state.w * state.h) {
+    const spot = state.snake.pop();
+    state.filled = false;
+    state.winMs = 0;
+    return placeApple(state, spot);
+  }
+  state.dead = true;
+  state.deathReason = 'tail';
+  return null;
+}
+
+// Stage-flavoured gift apples. `single` keeps the original behaviour; the other
+// rules add one small, readable twist without changing how the snake eats.
+export function spawnGiftApples(state, rule = 'single') {
+  const first = spawnGiftApple(state);
+  if (!first) return [];
+  const apples = [first];
+
+  if (rule === 'pair') {
+    const spot = neighbourFreeCell(state, first);
+    if (spot) apples.push(placeApple(state, spot));
+  } else if (rule === 'twin') {
+    const spot = { x: state.w - 1 - first.x, y: state.h - 1 - first.y };
+    if (!same(spot, first) && cellFree(state, spot)) apples.push(placeApple(state, spot));
+  } else if (rule === 'pass') {
+    // The long ball lands at the far end of the reachable run, so the snake
+    // crosses more of the board to collect it.
+    const ahead = upcomingCells(state, CONFIG.chaseReach);
+    const far = ahead[ahead.length - 1];
+    if (far && !same(far, first)) {
+      first.x = far.x;
+      first.y = far.y;
+    }
+  } else if (rule === 'slide') {
+    // Arctic fruit skids on the ice until the wall or another object stops it.
+    let next = { x: first.x + state.dir.x, y: first.y + state.dir.y };
+    while (cellFree(state, next)) {
+      first.x = next.x;
+      first.y = next.y;
+      next = { x: first.x + state.dir.x, y: first.y + state.dir.y };
+    }
+  }
+  return apples;
+}
+
+// Volcano embers roll to one free orthogonal neighbour. Prefer the direction
+// away from the nearest wall so the fruit does not hug the edge.
+export function driftApple(state, apple) {
+  const rand = state.rand ?? Math.random;
+  const options = [];
+  for (const d of DIRS) {
+    const c = { x: apple.x + d.x, y: apple.y + d.y };
+    if (cellFree(state, c)) options.push(c);
+  }
+  if (!options.length) return null;
+  const cx = (state.w - 1) / 2;
+  const cy = (state.h - 1) / 2;
+  options.sort((a, b) => {
+    const da = Math.abs(a.x - cx) + Math.abs(a.y - cy);
+    const db = Math.abs(b.x - cx) + Math.abs(b.y - cy);
+    return da - db;
+  });
+  const pickIdx = options.length > 1 && rand() < 0.35 ? 1 : 0;
+  const to = options[pickIdx];
+  apple.x = to.x;
+  apple.y = to.y;
+  return to;
+}
+
+// Neon City EMP: each apple blinks to a random free cell, never onto the snake,
+// a bomb or another apple. Returns how many apples actually moved.
+export function scatterApples(state) {
+  const taken = new Set([
+    ...state.snake.map(key),
+    ...(state.bombs || []).map(key),
+  ]);
+  const free = [];
+  for (let y = 0; y < state.h; y++) {
+    for (let x = 0; x < state.w; x++) {
+      if (!taken.has(`${x},${y}`)) free.push({ x, y });
+    }
+  }
+  const rand = state.rand ?? Math.random;
+  let moved = 0;
+  for (const apple of state.apples) {
+    if (!free.length) break;
+    const idx = Math.floor(rand() * free.length);
+    const to = free.splice(idx, 1)[0];
+    if (to.x !== apple.x || to.y !== apple.y) moved++;
+    apple.x = to.x;
+    apple.y = to.y;
+  }
+  return moved;
+}
+
+function cellFree(state, p) {
+  if (!inBounds(state, p)) return false;
+  const k = key(p);
+  return !state.snake.some((s) => key(s) === k)
+    && !state.apples.some((a) => key(a) === k)
+    && !(state.bombs || []).some((b) => key(b) === k);
+}
+
+function neighbourFreeCell(state, p) {
+  const cells = [];
+  for (const d of DIRS) {
+    const c = { x: p.x + d.x, y: p.y + d.y };
+    if (cellFree(state, c)) cells.push(c);
+  }
+  return cells.length ? cells[Math.floor((state.rand ?? Math.random)() * cells.length)] : null;
+}
+
+// Garden compost and any future sprout use this: plant on the nearest free
+// cells around a point so the new fruit never replaces the snake or another item.
+export function plantApples(state, around, count = 1) {
+  const out = [];
+  for (let ring = 1; ring <= Math.max(state.w, state.h) && out.length < count; ring++) {
+    for (let dy = -ring; dy <= ring && out.length < count; dy++) {
+      for (let dx = -ring; dx <= ring && out.length < count; dx++) {
+        if (Math.abs(dx) + Math.abs(dy) !== ring) continue;
+        const c = { x: around.x + dx, y: around.y + dy };
+        if (cellFree(state, c)) out.push(placeApple(state, c));
+      }
+    }
+  }
+  return out;
+}
+
+// Space gravity: one cell closer to the burst, never onto the snake or another item.
+export function pullApplesToward(state, center) {
+  const blocked = new Set([
+    ...state.snake.map(key),
+    ...(state.bombs || []).map(key),
+    ...state.apples.map(key),
+  ]);
+  let moved = 0;
+  for (const apple of state.apples) {
+    const from = key(apple);
+    const dx = center.x - apple.x;
+    const dy = center.y - apple.y;
+    const step = Math.abs(dx) >= Math.abs(dy)
+      ? { x: Math.sign(dx), y: 0 }
+      : { x: 0, y: Math.sign(dy) };
+    if (!step.x && !step.y) continue;
+    const to = { x: apple.x + step.x, y: apple.y + step.y };
+    const toKey = key(to);
+    if (!inBounds(state, to) || blocked.has(toKey)) continue;
+    blocked.delete(from);
+    blocked.add(toKey);
+    apple.x = to.x;
+    apple.y = to.y;
+    moved++;
+  }
+  return moved;
 }
 
 // Any empty cell, or null on a full board.
@@ -652,7 +806,115 @@ export function eatBomb(state, bomb) {
     if (at >= 0) state.bombs.splice(at, 1);
   }
   const cut = Math.min(CONFIG.bombCut, state.snake.length - CONFIG.minLength);
-  return cut > 0 ? state.snake.splice(state.snake.length - cut, cut) : [];
+  const removed = cut > 0 ? state.snake.splice(state.snake.length - cut, cut) : [];
+  // advanceBombs detonates after step(), so a cut must cancel the lap right here.
+  if (state.filled && state.snake.length < state.w * state.h) {
+    state.filled = false;
+    state.winMs = 0;
+  }
+  return removed;
+}
+
+// Stage bombs carry their movement rule on the object, so a bomb keeps the
+// behaviour of the stage that dropped it even after the environment cycles.
+export function primeBomb(bomb, rule, dir) {
+  bomb.rule = rule;
+  if (dir) bomb.dir = { x: dir.x, y: dir.y };
+  bomb.warmup = rule === 'tide' ? 3 : 2;
+  bomb.age = 0;
+  bomb.moves = 0;
+  bomb.spent = false;
+  return bomb;
+}
+
+function bombStep(state, bomb) {
+  const next = { x: bomb.x + bomb.dir.x, y: bomb.y + bomb.dir.y };
+  const k = key(next);
+  if (!inBounds(state, next)) return 'wall';
+  if (state.snake.some((s) => key(s) === k)) return 'snake';
+  if (state.apples.some((a) => key(a) === k)) return 'blocked';
+  if (state.bombs.some((b) => b !== bomb && key(b) === k)) return 'blocked';
+  bomb.x = next.x;
+  bomb.y = next.y;
+  return 'moved';
+}
+
+function detonateBomb(state, bomb, events) {
+  const at = { x: bomb.x, y: bomb.y };
+  const removed = eatBomb(state, bomb);
+  events.push({ bomb, removed, at });
+}
+
+// One logic tick of stage bomb motion. Static bombs never enter this path.
+// Returns the bombs that touched the snake so the renderer can explode them.
+export function advanceBombs(state) {
+  const events = [];
+  for (const bomb of (state.bombs || []).slice()) {
+    if (bomb.spent || !bomb.rule || bomb.rule === 'static') continue;
+    if (!state.bombs.includes(bomb)) continue;
+    if (bomb.warmup > 0) {
+      bomb.warmup--;
+      continue;
+    }
+    bomb.age = (bomb.age || 0) + 1;
+    if (bomb.age > 24) {
+      bomb.spent = true;
+      continue;
+    }
+
+    if (bomb.rule === 'tide') {
+      // The tide washes the bomb a few cells toward the head, then leaves it.
+      if (bomb.moves >= 3) {
+        bomb.spent = true;
+        continue;
+      }
+      const head = state.snake[0];
+      if (!head) continue;
+      const dx = head.x - bomb.x;
+      const dy = head.y - bomb.y;
+      bomb.dir = Math.abs(dx) >= Math.abs(dy)
+        ? { x: Math.sign(dx), y: 0 }
+        : { x: 0, y: Math.sign(dy) };
+      if (!bomb.dir.x && !bomb.dir.y) {
+        bomb.spent = true;
+        continue;
+      }
+      const moved = bombStep(state, bomb);
+      if (moved === 'snake') detonateBomb(state, bomb, events);
+      else if (moved === 'moved') bomb.moves++;
+      else bomb.spent = true;
+      continue;
+    }
+
+    // Static-effect bombs must stay where they land, dir or no dir.
+    if (bomb.rule !== 'kick' && bomb.rule !== 'barrel') {
+      bomb.spent = true;
+      continue;
+    }
+
+    // Kick and barrel both roll along a stored direction.
+    if (!bomb.dir || (!bomb.dir.x && !bomb.dir.y)) {
+      bomb.spent = true;
+      continue;
+    }
+    let moved = bombStep(state, bomb);
+    if (moved === 'snake') {
+      detonateBomb(state, bomb, events);
+      continue;
+    }
+    if (moved === 'moved') {
+      bomb.moves++;
+      continue;
+    }
+    if (bomb.rule === 'barrel') {
+      // Bounce off the wall or an occupied cell, then try again next tick.
+      bomb.dir.x *= -1;
+      bomb.dir.y *= -1;
+      continue;
+    }
+    bomb.spent = true;
+  }
+  return events;
 }
 
 export function step(state) {
