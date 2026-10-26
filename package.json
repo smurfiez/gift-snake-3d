@@ -3,13 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "python3 -m http.server 5173",
-    "bridge": "node server/bridge.mjs",
+    "start": "python3 -m http.server 9010",
+    "bridge": "python3 server/bridge.py",
     "feed": "node scripts/feed.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "test:bridge": "python3 -m unittest discover -s test -p 'test_*.py'"
   },
   "dependencies": {
-    "tiktok-live-connector": "^2.5.0",
     "ws": "^8.22.0"
   }
 }

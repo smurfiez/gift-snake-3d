@@ -5,6 +5,9 @@ import { ENVIRONMENTS, environmentAt } from './environments.js';
 import { createProp, groundTexture, createAmbient } from './environment-art.js';
 import { normaliseTotals, bumpTotals } from './totals.js';
 import { createTikTokFeed } from './tiktok.js';
+import { stageMeta, createStageRound, chargeStage, consumeStageEvent, advancePassive, DIFFICULTY_LABELS } from './stage-rules.js';
+import { createStageApple, createStageBomb } from './gift-art.js';
+import { createStageAudio } from './stage-audio.js';
 
 const $ = (s) => document.querySelector(s);
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -29,6 +32,10 @@ const hud = {
   statApples: $('#stat-apples'),
   statBombs: $('#stat-bombs'),
   statRule: $('#stat-rule'),
+  stageGuide: $('#stage-guide'),
+  stageGuideBtn: $('#stage-guide-btn'),
+  stageGuideClose: $('#stage-guide-close'),
+  stageGuideList: $('#stage-guide-list'),
   statTheme: $('#stat-theme'),
   themeBtn: $('#stat-theme-btn'),
   toasts: $('#toasts'),
@@ -49,8 +56,21 @@ const hud = {
   dbgDeck: $('#dbg-deck'),
   dbgTiktok: $('#dbg-tiktok'),
   dbgTiktokState: $('#dbg-tiktok-state'),
+  dbgRoom: $('#dbg-room'),
+  dbgRoomGo: $('#dbg-room-go'),
   dbgSpeed: $('#dbg-speed'),
   frame: $('.frame'),
+  stageIntro: $('#stage-intro'),
+  stageIntroKicker: $('#stage-intro-kicker'),
+  stageIntroName: $('#stage-intro-name'),
+  stageIntroApple: $('#stage-intro-apple'),
+  stageIntroBomb: $('#stage-intro-bomb'),
+  stageIntroPassive: $('#stage-intro-passive'),
+  stageIntroEvent: $('#stage-intro-event'),
+  stageMeter: $('#stage-meter'),
+  stageMeterLabel: $('#stage-meter-label'),
+  stageMeterPct: $('#stage-meter-pct'),
+  stageMeterFill: $('#stage-meter-fill'),
 };
 
 // ---------- audio (synthesized, no asset files) ----------
@@ -78,6 +98,9 @@ function saveSound() {
   }
 }
 
+// Stage ambience borrows the shared AudioContext above; it never opens its own.
+const stageAudio = createStageAudio();
+
 // Browsers only allow AudioContext creation/resume inside a gesture. Callers
 // unlock on pointerdown/keydown, so no context exists before the first input.
 function unlockAudio() {
@@ -86,6 +109,8 @@ function unlockAudio() {
   try {
     if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
     if (ac.state === 'suspended') ac.resume().catch(() => {});
+    stageAudio.setContext(ac);
+    stageAudio.setEnabled(soundOn);
     loadSamples();
   } catch {
     audioFailed = true;
@@ -918,12 +943,7 @@ function applyEnvironment(index) {
   bodyCells.material.color.set(env.accent);
   headCell.material.color.set(env.accent);
 
-  // Gift skins follow the stage: fruit tint plus bomb shell and fuse spark.
-  appleMat.color.set(env.apple);
-  appleMat.emissive.set(env.appleEm);
-  bombMat.color.set(env.bomb);
-  bombMat.emissive.set(env.bombEm);
-  sparkMat.color.set(env.spark);
+  // Gift skins come from the stage factories, so no shared material tint here.
 
   if (hud.statTheme) hud.statTheme.textContent = env.name.toUpperCase();
   if (hud.statRule) {
@@ -933,64 +953,468 @@ function applyEnvironment(index) {
   // The static aria-label would otherwise hide the visible stage name from assistive tech.
   hud.themeBtn?.setAttribute('aria-label', `Change environment, current: ${env.name}. ${env.appleLabel}, ${env.bombLabel}`);
 
+  // Gift meshes bake the stage silhouette, so a stage swap drops every mesh and
+  // lets syncApples / syncBombs recreate them for the new stage next frame.
+  for (const a of state.apples) removeAppleMesh(a);
+  for (const b of state.bombs || []) removeBombMesh(b);
+
   // Props belong to the stage too, so the apron ring is rebuilt, not recoloured.
   // Scenery first: spectator spawns reject against the props that exist now.
   layoutScenery();
   layoutAmbient();
   layoutSpectators();
+
+  // A new stage owns a fresh meter, a fresh intro card and its own ambience.
+  // If a blizzard or blackout was still running, un-wind it against the new
+  // stage before clearing the markers.
+  if (blizzardRevertAt) state.tickMs = Math.max(CONFIG.minTick, state.tickMs - blizzardMs);
+  blizzardRevertAt = 0;
+  blizzardMs = 0;
+  if (blackoutRevertAt) restoreStageLights();
+  blackoutRevertAt = 0;
+  torchPulseUntil = 0;
+  keyLightBase = env.keyIntensity;
+  ambientLightBase = env.ambientIntensity;
+  stageRound = createStageRound(env.id);
+  stageTimers.length = 0;
+  clearEatenTotals();
+  renderStageMeter();
+  renderStageGuide();
+  showStageIntro(env);
+  stageAudio.setStage(env.id);
 }
 
-// apples
-const appleGeo = new THREE.SphereGeometry(0.3, 16, 12);
-const appleMat = new THREE.MeshToonMaterial({
-  color: 0xff2d55,
-  emissive: 0xff1744,
-  emissiveIntensity: 0.35,
-  gradientMap: toonRamp,
-});
-const stemGeo = new THREE.CylinderGeometry(0.032, 0.032, 0.18, 6);
-const stemMat = new THREE.MeshToonMaterial({ color: 0x6b3f1d, gradientMap: toonRamp });
+// ---------- stage progression ----------
+// Eight stages share one meter: gifts charge it, a full meter fires the stage
+// event, and the stage passive runs on its own clock. Board effects stay here;
+// stage-rules.js only owns the numbers.
+let stageRound = createStageRound('beach');
+let stageIntroUntil = 0;
+let stageGuideOpen = false;
+const stageTimers = [];
+let blizzardRevertAt = 0;
+let blizzardMs = 0;
+let blackoutRevertAt = 0;
+let keyLightBase = keyLight.intensity;
+let ambientLightBase = ambientLight.intensity;
+let torchPulseUntil = 0;
 
+function renderStageMeter() {
+  if (!hud.stageMeterFill || !hud.stageMeterPct || !hud.stageMeterLabel) return;
+  const meta = stageMeta(stageRound.id);
+  const pct = Math.round((stageRound.charge / stageRound.goal) * 100);
+  hud.stageMeterFill.style.width = `${pct}%`;
+  hud.stageMeterPct.textContent = `${pct}%`;
+  hud.stageMeterLabel.textContent = meta.event.label.toUpperCase();
+  if (hud.stageMeter) {
+    hud.stageMeter.setAttribute('aria-valuenow', String(pct));
+    hud.stageMeter.setAttribute('aria-valuetext', `${pct}% toward ${meta.event.label}`);
+  }
+}
+
+function showStageIntro(env) {
+  if (!hud.stageIntro) return;
+  const meta = stageMeta(env.id);
+  hud.stageIntroKicker.textContent =
+    `STAGE ${envIndex + 1} / ${ENVIRONMENTS.length} · ${DIFFICULTY_LABELS[meta.difficulty - 1].toUpperCase()}`;
+  hud.stageIntroName.textContent = env.name.toUpperCase();
+  hud.stageIntroApple.textContent = `🍎 ${env.appleLabel}`;
+  hud.stageIntroBomb.textContent = `💣 ${env.bombLabel}`;
+  hud.stageIntroPassive.textContent = `${meta.passive.label}: ${meta.passive.text}`;
+  hud.stageIntroEvent.textContent = `Next event: ${meta.event.label}`;
+  hud.stageIntro.classList.add('show');
+  hud.stageIntro.setAttribute('aria-hidden', 'false');
+  stageIntroUntil = clock + 2;
+}
+
+function hideStageIntro() {
+  stageIntroUntil = 0;
+  if (!hud.stageIntro) return;
+  hud.stageIntro.classList.remove('show');
+  hud.stageIntro.setAttribute('aria-hidden', 'true');
+}
+
+// The always-available reference: one card per stage, current stage outlined.
+// Built from the same stage data as the intro so the two can never drift.
+function renderStageGuide() {
+  if (!hud.stageGuideList) return;
+  const list = hud.stageGuideList;
+  list.replaceChildren();
+  const current = environmentAt(envIndex).id;
+  ENVIRONMENTS.forEach((env, i) => {
+    const meta = stageMeta(env.id);
+    const item = document.createElement('li');
+    item.className = env.id === current ? 'stage-guide-item current' : 'stage-guide-item';
+    if (env.id === current) item.setAttribute('aria-current', 'true');
+
+    const top = document.createElement('div');
+    top.className = 'stage-guide-item-top';
+    const name = document.createElement('b');
+    name.textContent = `${i + 1}. ${env.name.toUpperCase()}`;
+    const diff = document.createElement('span');
+    diff.textContent = DIFFICULTY_LABELS[meta.difficulty - 1];
+    top.append(name, diff);
+
+    const rules = document.createElement('p');
+    rules.className = 'sg-rules';
+    rules.textContent = `🍎 ${env.appleLabel} · 💣 ${env.bombLabel}`;
+
+    const passive = document.createElement('p');
+    passive.textContent = `Passive — ${meta.passive.label}: ${meta.passive.text}`;
+
+    const event = document.createElement('p');
+    event.className = 'sg-event';
+    event.textContent = `Event — ${meta.event.label}: ${meta.event.text}`;
+
+    item.append(top, rules, passive, event);
+    list.append(item);
+  });
+}
+
+function setStageGuide(open) {
+  stageGuideOpen = !!open;
+  if (!hud.stageGuide) return;
+  hud.stageGuide.classList.toggle('show', stageGuideOpen);
+  hud.stageGuide.setAttribute('aria-hidden', stageGuideOpen ? 'false' : 'true');
+  if (stageGuideOpen) {
+    hideStageIntro();
+    renderStageGuide();
+    hud.stageGuideClose?.focus();
+  } else {
+    hud.stageGuideBtn?.focus();
+  }
+}
+
+// Charge one gift, then fire at most one event on the gift that fills the meter.
+function chargeStageGift(type) {
+  const out = chargeStage(stageRound, type);
+  if (out.charged) {
+    const event = consumeStageEvent(stageRound);
+    if (event) triggerStageEvent(event);
+  }
+  renderStageMeter();
+}
+
+// A cell an item may move onto: in bounds and free of the snake, apples and
+// bombs (the moving item itself is ignored).
+function stageCellFree(x, y, ignore) {
+  if (x < 0 || y < 0 || x >= state.w || y >= state.h) return false;
+  if (state.snake.some((s) => s.x === x && s.y === y)) return false;
+  if (state.apples.some((a) => a !== ignore && a.x === x && a.y === y)) return false;
+  return !(state.bombs || []).some((b) => b !== ignore && b.x === x && b.y === y);
+}
+
+function shiftItem(item, dx, dy) {
+  if (!stageCellFree(item.x + dx, item.y + dy, item)) return false;
+  item.x += dx;
+  item.y += dy;
+  return true;
+}
+
+// Each apple moves at most once, and only onto a cell that was free beforehand.
+function shiftApples(dx, dy) {
+  let moved = 0;
+  for (const a of state.apples) if (shiftItem(a, dx, dy)) moved++;
+  return moved;
+}
+
+// Distinct free cells in random order, for hazards that need several targets.
+function freeCellsFor(count) {
+  const taken = new Set([
+    ...state.snake.map((s) => `${s.x},${s.y}`),
+    ...state.apples.map((a) => `${a.x},${a.y}`),
+    ...(state.bombs || []).map((b) => `${b.x},${b.y}`),
+  ]);
+  const cells = [];
+  for (let y = 0; y < state.h; y++) {
+    for (let x = 0; x < state.w; x++) {
+      if (!taken.has(`${x},${y}`)) cells.push({ x, y });
+    }
+  }
+  for (let i = 0; i < count && i < cells.length; i++) {
+    const j = i + Math.floor(Math.random() * (cells.length - i));
+    const swap = cells[i];
+    cells[i] = cells[j];
+    cells[j] = swap;
+  }
+  return cells.slice(0, count);
+}
+
+// placeApple is private to logic.js, and end-zone fruit must land on an exact
+// row rather than in the ring plantApples() scans.
+function addAppleAt(x, y) {
+  const apple = { id: state.nextAppleId++, x, y };
+  state.apples.push(apple);
+  return apple;
+}
+
+function ringBurst(cell, color, count = 14) {
+  tmpVec.set(cell.x + 0.5, 0.4, cell.y + 0.5);
+  burst(tmpVec, BURST.speed, { count, color, ring: true, spread: 0.5, up: 0.4, life: 0.6 });
+}
+
+function nearestAppleTo(p) {
+  let best = null;
+  let bd = Infinity;
+  for (const a of state.apples) {
+    if (!p) return a;
+    const d = Math.abs(a.x - p.x) + Math.abs(a.y - p.y);
+    if (d < bd) {
+      bd = d;
+      best = a;
+    }
+  }
+  return best;
+}
+
+function nearestBombTo(p) {
+  let best = null;
+  let bd = Infinity;
+  for (const b of state.bombs || []) {
+    if (!p) return b;
+    const d = Math.abs(b.x - p.x) + Math.abs(b.y - p.y);
+    if (d < bd) {
+      bd = d;
+      best = b;
+    }
+  }
+  return best;
+}
+
+function restoreStageLights() {
+  const env = environmentAt(envIndex);
+  keyLight.intensity = env.keyIntensity;
+  ambientLight.intensity = env.ambientIntensity;
+  keyLightBase = env.keyIntensity;
+  ambientLightBase = env.ambientIntensity;
+}
+
+// Instant hazards telegraph for 1.2s so a viewer can read the warning before
+// the board changes. The effect runs on the frame clock, never a real timer.
+function triggerStageEvent(event) {
+  if (event.id === 'eruption' || event.id === 'blackout' || event.id === 'meteor') {
+    const color = event.id === 'eruption' ? 0xff4d3d : event.id === 'blackout' ? 0x9ff6ff : 0xff8a3d;
+    const cells = event.id === 'blackout'
+      ? (state.bombs || []).slice(0, 3).map((b) => ({ x: b.x, y: b.y }))
+      : event.id === 'meteor'
+        ? state.apples.slice(0, 4).map((a) => ({ x: a.x, y: a.y }))
+        : freeCellsFor(3);
+    if (!cells.length) cells.push({ x: Math.floor(state.w / 2), y: Math.floor(state.h / 2) });
+    for (const c of cells) ringBurst(c, color);
+    toast(`⚠️ ${event.label}`, 'bad');
+    stageTimers.push({ at: clock + 1.2, fn: () => applyStageEvent(event, cells) });
+    return;
+  }
+  applyStageEvent(event);
+}
+
+function applyStageEvent(event, targets) {
+  switch (event.id) {
+    case 'surge': {
+      let swept = 0;
+      for (const b of state.bombs || []) if (shiftItem(b, 0, 1)) swept++;
+      const grown = plantApples(state, {
+        x: Math.floor((state.w - 1) / 2),
+        y: Math.floor((state.h - 1) / 2),
+      }, 3);
+      tmpVec.set(state.w / 2, 0.6, state.h / 2);
+      burst(tmpVec, BURST.speed, { color: 0x39f6ff, count: 30, ring: true, power: 1.4 });
+      toast(`🌊 Tide surge — ${swept} bombs swept, ${grown.length} apples`, 'good');
+      return;
+    }
+    case 'goal': {
+      const rows = Math.random() < 0.5 ? [0, 1] : [state.h - 2, state.h - 1];
+      const cells = [];
+      for (const y of rows) {
+        for (let x = 0; x < state.w; x++) if (stageCellFree(x, y)) cells.push({ x, y });
+      }
+      let grown = 0;
+      while (grown < 4 && cells.length) {
+        const c = cells.splice(Math.floor(Math.random() * cells.length), 1)[0];
+        addAppleAt(c.x, c.y);
+        grown++;
+      }
+      tmpVec.set(state.w / 2, 0.6, rows[0] + 0.5);
+      burst(tmpVec, BURST.apple, { color: 0xffc14d, count: 26, ring: true, power: 1.3 });
+      toast(`🥅 Goal rush — ${grown} apples in the end zone`, 'good');
+      return;
+    }
+    case 'vault': {
+      const head = state.snake[0] || { x: Math.floor(state.w / 2), y: Math.floor(state.h / 2) };
+      const grown = plantApples(state, head, 6);
+      for (const a of grown) a.dropAt = clock + 0.35;
+      tmpVec.set(head.x + 0.5, 0.5, head.y + 0.5);
+      burst(tmpVec, BURST.win, { color: 0xffe9a0, count: 28, ring: true, power: 1.2 });
+      toast(`🗝️ Vault opens — ${grown.length} apples ring the snake`, 'good');
+      return;
+    }
+    case 'bloom': {
+      const targets = state.apples.slice(0, 5);
+      let grown = 0;
+      for (const a of targets) {
+        for (const b of plantApples(state, a, 1)) {
+          b.dropAt = clock + 0.3;
+          grown++;
+        }
+      }
+      tmpVec.set(state.w / 2, 0.5, state.h / 2);
+      burst(tmpVec, BURST.apple, { color: 0x6dff5a, count: 26, ring: true, power: 1.2 });
+      toast(`🌸 Full bloom — ${grown} new apples`, 'good');
+      return;
+    }
+    case 'meteor': {
+      const moved = scatterApples(state);
+      const grown = plantApples(state, {
+        x: Math.floor((state.w - 1) / 2),
+        y: Math.floor((state.h - 1) / 2),
+      }, 2);
+      for (const a of grown) a.dropAt = clock + 0.3;
+      const spot = freeCellFor(state);
+      const bomb = spot ? spawnBombAt(state, spot) : null;
+      if (bomb) primeBomb(bomb, 'static', state.dir);
+      tmpVec.set(state.w / 2, 0.7, state.h / 2);
+      burst(tmpVec, BURST.bomb, { color: 0xff8a3d, count: 30, power: 1.4 });
+      toast(`☄️ Meteor shower — ${moved} apples scattered`, 'bad');
+      return;
+    }
+    case 'eruption': {
+      let spawned = 0;
+      for (const c of targets && targets.length ? targets : freeCellsFor(3)) {
+        if (!stageCellFree(c.x, c.y)) continue;
+        const bomb = spawnBombAt(state, c);
+        if (!bomb) continue;
+        primeBomb(bomb, 'static', state.dir);
+        ringBurst(c, 0xff4d3d, 10);
+        spawned++;
+      }
+      flash('#ff4d3d', '66');
+      shakeMag = Math.max(shakeMag, 0.6);
+      if (!spawned) toast('🌋 Eruption fizzled — bomb cap reached', 'bad');
+      else toast(`🌋 Eruption — ${spawned} fresh bomb${spawned === 1 ? '' : 's'}`, 'bad');
+      return;
+    }
+    case 'blizzard': {
+      const before = state.tickMs;
+      state.tickMs = Math.min(CONFIG.maxTick, before + 40);
+      blizzardMs += state.tickMs - before;
+      blizzardRevertAt = clock + 5;
+      flash('#dff8ff', '88');
+      toast('❄️ Blizzard — the snake crawls for 5s', 'bad');
+      return;
+    }
+    case 'blackout': {
+      const bombs = state.bombs || [];
+      const cells = freeCellsFor(bombs.length);
+      let moved = 0;
+      for (let i = 0; i < bombs.length && i < cells.length; i++) {
+        bombs[i].x = cells[i].x;
+        bombs[i].y = cells[i].y;
+        moved++;
+      }
+      keyLight.intensity = keyLightBase * 0.2;
+      ambientLight.intensity = ambientLightBase * 0.35;
+      blackoutRevertAt = clock + 4;
+      flash('#0d2b33', 'aa');
+      toast(`🌃 Blackout — ${moved} bombs shuffled`, 'bad');
+      return;
+    }
+    default:
+  }
+}
+
+function runStagePassive(passive) {
+  const head = state.snake[0];
+  switch (passive.id) {
+    case 'tide':
+      shiftApples(0, -1);
+      return;
+    case 'endzone':
+      shiftApples(0, 1);
+      return;
+    case 'torchlight': {
+      torchPulseUntil = clock + 0.4;
+      const a = nearestAppleTo(head);
+      tmpVec.set(a ? a.x + 0.5 : state.w / 2, a ? 0.5 : 0.6, a ? a.y + 0.5 : state.h / 2);
+      burst(tmpVec, BURST.slow, { color: 0xffc14d, count: 14, power: 1 });
+      return;
+    }
+    case 'bloom': {
+      // Garden's passive keeps blooming forever; cap the free fruit it adds.
+      if (state.apples.length >= CONFIG.maxApples + 4) return;
+      const targets = state.apples.slice(0, 2);
+      let grown = 0;
+      for (const a of targets) {
+        for (const b of plantApples(state, a, 1)) {
+          b.dropAt = clock + 0.3;
+          grown++;
+        }
+      }
+      if (!grown) return;
+      tmpVec.set(state.w / 2, 0.5, state.h / 2);
+      burst(tmpVec, BURST.apple, { color: 0x6dff5a, count: 14, power: 1 });
+      return;
+    }
+    case 'gravity': {
+      pullApplesToward(state, { x: state.w / 2, y: state.h / 2 });
+      tmpVec.set(state.w / 2, 0.5, state.h / 2);
+      burst(tmpVec, BURST.speed, { color: 0x39f6ff, count: 16, power: 1.1 });
+      return;
+    }
+    case 'fissure': {
+      const bomb = nearestBombTo(head);
+      if (!bomb) return;
+      const dx = bomb.x - (head ? head.x : bomb.x);
+      const dy = bomb.y - (head ? head.y : bomb.y);
+      let ax = 0;
+      let ay = 0;
+      if (Math.abs(dx) >= Math.abs(dy)) ax = Math.sign(dx);
+      else ay = Math.sign(dy);
+      if (!ax && !ay) ax = 1;
+      let moved = 0;
+      for (let i = 0; i < 2; i++) if (shiftItem(bomb, ax, ay)) moved++;
+      if (!moved) return;
+      tmpVec.set(bomb.x + 0.5, 0.5, bomb.y + 0.5);
+      burst(tmpVec, BURST.bomb, { color: 0xff8a3d, count: 16, power: 1.1 });
+      toast(`🌋 Fissure shoved a bomb ${moved} cells`, 'bad');
+      return;
+    }
+    case 'ice': {
+      shiftApples(state.dir.x, state.dir.y);
+      setWorld(head || { x: state.w / 2, y: state.h / 2 }, tmpVec);
+      tmpVec.y = 0.5;
+      burst(tmpVec, BURST.speed, { color: 0xdff8ff, count: 16, power: 1 });
+      return;
+    }
+    case 'crosswalk': {
+      let moved = 0;
+      for (const a of state.apples) {
+        const dx = a.x < state.w / 2 ? -1 : 1;
+        if (shiftItem(a, dx, 0)) moved++;
+      }
+      if (!moved) return;
+      tmpVec.set(state.w / 2, 0.5, state.h / 2);
+      burst(tmpVec, BURST.eat, { color: 0xff4de0, count: 14, power: 1 });
+      return;
+    }
+    default:
+  }
+}
+
+function runStageTimers() {
+  for (let i = stageTimers.length - 1; i >= 0; i--) {
+    if (clock < stageTimers[i].at) continue;
+    const t = stageTimers.splice(i, 1)[0];
+    t.fn();
+  }
+}
+
+// apples and bombs: one shared shape per stage, from gift-art.js
 function makeAppleMesh() {
-  const group = new THREE.Group();
-  const body = new THREE.Mesh(appleGeo, appleMat);
-  body.position.y = 0.3;
-  group.add(body);
-  const stem = new THREE.Mesh(stemGeo, stemMat);
-  stem.position.y = 0.52;
-  group.add(stem);
-  return group;
+  return createStageApple(environmentAt(envIndex).id);
 }
-
-// bombs: dark body, short fuse, warm spark — hazards that stay in the toy palette
-const bombGeo = new THREE.SphereGeometry(0.28, 16, 12);
-const bombMat = new THREE.MeshToonMaterial({
-  color: 0x3a2436,
-  emissive: 0x1c0f1a,
-  emissiveIntensity: 0.25,
-  gradientMap: toonRamp,
-});
-const fuseGeo = new THREE.CylinderGeometry(0.028, 0.028, 0.2, 6);
-const fuseMat = new THREE.MeshToonMaterial({ color: 0x8a6a4a, gradientMap: toonRamp });
-const sparkGeo = new THREE.SphereGeometry(0.085, 10, 8);
-const sparkMat = new THREE.MeshBasicMaterial({
-  color: 0xffc14d, blending: THREE.AdditiveBlending, depthWrite: false,
-});
 
 function makeBombMesh() {
-  const group = new THREE.Group();
-  const body = new THREE.Mesh(bombGeo, bombMat);
-  body.position.y = 0.3;
-  group.add(body);
-  const fuse = new THREE.Mesh(fuseGeo, fuseMat);
-  fuse.position.set(0, 0.55, 0);
-  fuse.rotation.z = 0.5;
-  group.add(fuse);
-  const spark = new THREE.Mesh(sparkGeo, sparkMat);
-  spark.position.set(-0.06, 0.66, 0);
-  group.add(spark);
-  group.userData.spark = spark;
-  return group;
+  return createStageBomb(environmentAt(envIndex).id);
 }
 
 // ---------- apple drop actors ----------
@@ -1105,11 +1529,12 @@ function updateDropActors(dt) {
 const dropA = new THREE.Vector3();
 const dropB = new THREE.Vector3();
 
-// The body that falls inside a drop actor: a glowing orb for fruit, the real
-// bomb (body, fuse, spark) for bombs.
+// The body that falls inside a drop actor: the stage apple for fruit, the stage
+// bomb for bombs. The bomb keeps the smaller actor scale it always had.
 function makeDropBody(kind) {
-  if (kind !== 'bomb') return new THREE.Mesh(meteorGeo, ufoDomeMat);
-  const bomb = makeBombMesh();
+  const id = environmentAt(envIndex).id;
+  if (kind !== 'bomb') return createStageApple(id);
+  const bomb = createStageBomb(id);
   bomb.scale.setScalar(0.85);
   return bomb;
 }
@@ -1660,7 +2085,7 @@ function throwWithSpectators(items, kind, viewer) {
       return;
     }
     s.job = {
-      cell, kind, delay: i * 0.24, t: 0, threw: false, projT: 0, restT: 0,
+      cell, kind, delay: i * Math.min(0.24, 3 / Math.max(1, items.length)), t: 0, threw: false, projT: 0, restT: 0,
       start: new THREE.Vector3(),
       target: new THREE.Vector3(cell.x + 0.5, 0.4, cell.y + 0.5),
     };
@@ -1838,6 +2263,10 @@ function layoutScenery() {
     if (prop.position.x >= state.w && box.min.x < state.w) prop.position.x += state.w - box.min.x + 0.04;
     if (prop.position.z <= 0 && box.max.z > 0) prop.position.z -= box.max.z + 0.04;
     if (prop.position.z >= state.h && box.min.z < state.h) prop.position.z += state.h - box.min.z + 0.04;
+    // Props never move after this, so bake the matrix once and stop the renderer
+    // recomputing it every frame.
+    prop.updateMatrix();
+    prop.matrixAutoUpdate = false;
     sceneryGroup.add(prop);
   }
 }
@@ -1880,7 +2309,7 @@ function nextDropVariant(kind = 'apple') {
   return environmentAt(envIndex).drops?.[kind] || 'thrower';
 }
 
-function queueAppleGift(from = null) {
+function queueAppleGift(from = null, count = 1) {
   // Treat rapid taps as one viewer spamming the same gift.
   const viewer = from || (lastViewer && Math.random() < 0.68 ? lastViewer : pick(VIEWERS));
   lastViewer = viewer;
@@ -1890,7 +2319,7 @@ function queueAppleGift(from = null) {
     appleBatches.set(viewer, b);
     b.timer = setTimeout(() => flushAppleBatch(viewer), APPLE_BATCH_MS);
   }
-  b.count++;
+  b.count += count;
 }
 
 function flushAppleBatch(viewer) {
@@ -1900,10 +2329,11 @@ function flushAppleBatch(viewer) {
   if (state.dead || state.won) return;
 
   // Gift apples may take the tail cell when the board is full; procedural
-  // apples never do. The stage rule can return more than one apple per gift.
+  // apples never do. The stage rule can return more than one apple per gift, so
+  // the loop stops at the requested item count instead of overshooting it.
   const env = environmentAt(envIndex);
   const apples = [];
-  for (let i = 0; i < b.count; i++) {
+  for (let i = 0; i < b.count && apples.length < b.count; i++) {
     const batch = spawnGiftApples(state, env.appleRule);
     if (!batch.length) break;
     for (const a of batch) {
@@ -2586,7 +3016,8 @@ function syncBombs(dt) {
     mesh.position.set(tmpVec.x, bob, tmpVec.z);
     mesh.rotation.y = (mesh.rotation.y + dt * 0.9) % TAU;
     mesh.rotation.z = Math.sin(clock * 1.7 + mesh.userData.seed) * 0.07;
-    mesh.userData.spark.scale.setScalar(0.8 + Math.sin(clock * 22 + mesh.userData.seed) * 0.3);
+    const base = mesh.userData.spark?.userData.base || 0.085;
+    mesh.userData.spark?.scale.setScalar(base * (0.8 + Math.sin(clock * 22 + mesh.userData.seed) * 0.3));
 
     const age = clock - mesh.userData.born;
     const pop = age < 0.32 ? Math.max(0.01, easeOutBack(age / 0.32)) : 1;
@@ -2631,7 +3062,8 @@ function updateCamera(dt) {
   }
 }
 
-// Session totals: per-round counters reset with the board, these do not.
+// Stored counters: wins/losses are the session record, apples/bombs are stage
+// counters and clear whenever the environment changes.
 const TOTALS_KEY = 'giftsnake.totals';
 const totals = (() => {
   try {
@@ -2663,6 +3095,15 @@ function countEaten(field) {
   renderTotals();
 }
 
+// Apples and bombs are stage counters: the stage intro starts them at zero.
+// Wins and losses keep their session record.
+function clearEatenTotals() {
+  totals.apples = 0;
+  totals.bombs = 0;
+  saveTotals();
+  renderTotals();
+}
+
 function toast(html, kind = '') {
   if (!toastsOn) return;
   const el = document.createElement('div');
@@ -2678,15 +3119,6 @@ function toast(html, kind = '') {
 
 const GIFT_POINTS = { apple: 10, bomb: 25, speed: 15, slow: 10, widen: 30, taller: 30 };
 const scores = new Map();
-const combos = new Map();
-
-function comboFor(viewer) {
-  const c = combos.get(viewer) || { n: 0, at: -99 };
-  c.n = clock - c.at < 4 ? Math.min(9, c.n + 1) : 1;
-  c.at = clock;
-  combos.set(viewer, c);
-  return Math.min(5, c.n);
-}
 
 function renderLeaderboard() {
   const top = [...scores].sort((a, b) => b[1] - a[1]).slice(0, 3);
@@ -2702,13 +3134,10 @@ function renderLeaderboard() {
     .join('');
 }
 
-// Viewer rivalry is the reason to come back: points persist across rounds and
-// gifts from the same viewer within 4s stack a multiplier (capped at 5x).
+// Viewer rivalry is the reason to come back: points persist across rounds.
 function logGift(type, viewer, units = 1) {
-  const mult = comboFor(viewer);
-  const points = GIFT_POINTS[type] * units * mult;
+  const points = GIFT_POINTS[type] * units;
   scores.set(viewer, (scores.get(viewer) || 0) + points);
-  if (mult > 1) toast(`🔥 <b>@${viewer}</b> ${mult}× combo +${points}`, 'good');
   renderLeaderboard();
 }
 
@@ -2746,7 +3175,7 @@ function simGiftTick(dt) {
   giftClock += dt;
   if (giftClock < SIM_GIFT_EVERY) return;
   giftClock = 0;
-  sendGift(pick(SIM_GIFTS));
+  sendGift(pick(SIM_GIFTS), null, 1);
 }
 
 function toggleDebug(force) {
@@ -2846,7 +3275,7 @@ function fovPunch(v) {
   fovKick = Math.max(-6, Math.min(6, fovKick + v));
 }
 
-function sendGift(type, from = null) {
+function sendGift(type, from = null, count = type === 'apple' ? 5 : 1) {
   if (state.dead || state.won) {
     sfx.error();
     toast('Round over — press <b>R</b> to restart', 'bad');
@@ -2855,8 +3284,10 @@ function sendGift(type, from = null) {
   const gift = GIFTS[type];
   if (!gift) return;
 
+  // Growth restarts the round, so it charges the replacement meter after reset.
   if (type === 'apple') {
-    queueAppleGift(from);
+    chargeStageGift(type);
+    queueAppleGift(from, count);
     return;
   }
 
@@ -2876,6 +3307,7 @@ function sendGift(type, from = null) {
     boardSize.h = ev.h;
     sfx.gift(type);
     reset(true);
+    chargeStageGift(type);
     logGift(type, viewer);
     toast(`${gift.icon} <b>@${viewer}</b> grew the map to ${ev.w} × ${ev.h}`, 'good');
     return;
@@ -2884,20 +3316,42 @@ function sendGift(type, from = null) {
   const ev = applyGift(state, type);
 
   if (type === 'bomb') {
-    if (!ev.ok) {
+    // One gift can carry a whole volley. Bombs only reach the board on landing,
+    // so cells queued by this same gift are passed as `exclude`; without it the
+    // picker keeps aiming at the same four cells ahead of the head.
+    const cells = [];
+    const seen = new Set();
+    const wanted = Math.max(1, Math.floor(count) || 1);
+    for (let i = 0; i < wanted; i++) {
+      const next = applyGift(state, 'bomb', seen);
+      if (!next.ok) break;
+      if (next.onBody && cells.length) break; // volley is at the board cap
+      seen.add(`${next.cell.x},${next.cell.y}`);
+      cells.push(next.cell);
+    }
+    if (!cells.length) {
       sfx.error();
       toast('💣 Bomb had no effect', 'bad');
       return;
     }
+    chargeStageGift(type);
     sfx.gift(type);
-    startDrop([ev.cell], nextDropVariant('bomb'), 'bomb', viewer);
+    startDrop(cells, nextDropVariant('bomb'), 'bomb', viewer);
     camPunch += 0.5;
     shakeMag = Math.max(shakeMag, 0.25);
     flash('#ff8a3d', '33');
-    toast(`💣 <b>@${viewer}</b> dropped a bomb`, 'bad');
-    logGift(type, viewer);
-    countGift(viewer, 'bomb');
+    const label = cells.length > 1 ? `${cells.length} bombs` : 'a bomb';
+    toast(`💣 <b>@${viewer}</b> dropped ${label}`, 'bad');
+    logGift(type, viewer, count);
+    countGift(viewer, 'bomb', count);
   } else if (type === 'speed' || type === 'slow') {
+    // Already at the tick limit: the gift changed nothing, so it earns no charge.
+    if (!ev.ok) {
+      sfx.error();
+      toast(`${gift.icon} ${gift.name} — no effect`, 'bad');
+      return;
+    }
+    chargeStageGift(type);
     sfx.gift(type);
     setWorld(state.snake[0], tmpVec);
     tmpVec.y = 0.6;
@@ -2931,7 +3385,7 @@ function sendGift(type, from = null) {
 // with a count. Viewer names from TikTok are passed through untouched.
 const feed = createTikTokFeed({
   onGift(effect, viewerName, count) {
-    for (let i = 0; i < count; i++) sendGift(effect, viewerName);
+    sendGift(effect, viewerName, count);
   },
   onStatus() {
     paintTikTok();
@@ -2951,6 +3405,7 @@ function paintTikTok() {
   const text = bridge.ignored > 0 ? `${label} · ignored ${bridge.ignored}` : label;
   hud.dbgTiktokState.textContent = text;
   hud.dbgTiktokState.title = text;
+  if (hud.dbgRoom) hud.dbgRoom.placeholder = bridge.room ? `@${bridge.room}` : 'handle';
 }
 
 function applyTikTok(force) {
@@ -2966,9 +3421,37 @@ hud.dbgTiktokState.addEventListener('click', () => {
   if (Array.isArray(unknown) ? unknown.length : unknown) console.table(unknown);
 });
 
+// Room switch: empty input reconnects to the same room, so a bridge that gave up
+// after its three retries can be revived from here.
+function reconnectRoom() {
+  const typed = hud.dbgRoom.value.trim();
+  if (!feed.reconnect(typed)) {
+    sfx.error();
+    toast('Turn <b>TikTok gifts</b> on first', 'bad');
+    return;
+  }
+  hud.dbgRoom.value = '';
+  const name = typed.replace(/^@+/, '');
+  toast(name ? `Reconnecting to <b>@${name}</b>` : 'Reconnecting to the current room', 'good');
+}
+
+hud.dbgRoomGo?.addEventListener('click', (event) => {
+  event.preventDefault();
+  reconnectRoom();
+});
+
+hud.dbgRoom?.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  reconnectRoom();
+});
+
 // ---------- lifecycle ----------
 function onDeath() {
   bumpRecord('losses');
+  // A warned hazard must not fire after the result.
+  stageTimers.length = 0;
+  hideStageIntro();
   deadAt = clock;
   shakeMag = Math.max(shakeMag, 0.75);
   fovPunch(4);
@@ -2989,6 +3472,8 @@ function onDeath() {
 
 function onWin() {
   bumpRecord('wins');
+  stageTimers.length = 0;
+  hideStageIntro();
   sfx.win();
   flash('#9dff3d');
   camPunch += 3;
@@ -3025,6 +3510,12 @@ function reset(keepGrowth = false) {
     boardSize.h = CONFIG.boardH;
   }
   state = createState(undefined, boardSize);
+  stageTimers.length = 0;
+  blizzardRevertAt = 0;
+  blizzardMs = 0;
+  blackoutRevertAt = 0;
+  torchPulseUntil = 0;
+  hideStageIntro();
   trail.length = 0;
   resetTrail();
   yawReady = false;
@@ -3055,7 +3546,6 @@ function reset(keepGrowth = false) {
   bombMeshes.length = 0;
   hud.toasts.replaceChildren();
   hud.log.replaceChildren();
-  combos.clear();
   renderLeaderboard();
   hideParticles();
   particleCursor = 0;
@@ -3064,6 +3554,9 @@ function reset(keepGrowth = false) {
   layoutBoard();
   // Every new round advances the environment; boot does not call reset, so round one stays on the first one.
   applyEnvironment(envIndex + 1);
+  // A reset is a round start, so it takes the stage speed and drops any earlier
+  // speed/slow gift bonus.
+  state.tickMs = stageMeta(environmentAt(envIndex).id).tickMs;
   camDist = fitDistance();
   camTarget.set(state.w / 2, 0, state.h / 2);
   camBase.copy(CAM_DIR).multiplyScalar(camDist).add(camTarget);
@@ -3099,6 +3592,27 @@ function frame(ms) {
   clock += dt;
   ambient?.update(clock);
 
+  // Stage intro, timed hazards and light recovery all run on the frame clock.
+  if (stageIntroUntil && clock >= stageIntroUntil) hideStageIntro();
+  if (blizzardRevertAt && clock >= blizzardRevertAt) {
+    state.tickMs = Math.max(CONFIG.minTick, state.tickMs - blizzardMs);
+    blizzardRevertAt = 0;
+    blizzardMs = 0;
+  }
+  if (blackoutRevertAt && clock >= blackoutRevertAt) {
+    restoreStageLights();
+    blackoutRevertAt = 0;
+  }
+  if (torchPulseUntil) {
+    if (clock < torchPulseUntil && !blackoutRevertAt) {
+      const k = 1 - (torchPulseUntil - clock) / 0.4;
+      keyLight.intensity = keyLightBase * (1 + Math.sin(k * Math.PI) * 0.85);
+    } else {
+      torchPulseUntil = 0;
+      if (!blackoutRevertAt) keyLight.intensity = keyLightBase;
+    }
+  }
+
   const win = updateWin(state, dt * 1000);
   if (win.won) {
     wonAt = clock;
@@ -3117,6 +3631,10 @@ function frame(ms) {
   const live = !state.dead && !state.won;
 
   if (live) {
+    runStageTimers();
+    const passive = advancePassive(stageRound, dt * 1000);
+    if (passive.due) runStagePassive(passive.passive);
+
     acc += dt * 1000 * debugSpeed;
     let guard = 0;
     while (acc >= state.tickMs && guard++ < 8) {
@@ -3150,9 +3668,9 @@ function frame(ms) {
         acc = 0;
         break;
       }
-      // Stage bombs move with the logic tick, never per frame. advanceBombs
-      // already takes the bomb off the board, so nothing is counted twice.
-      for (const ev of advanceBombs(state)) detonateVisual(ev.bomb, ev.removed, ev.at);
+      // Stage bombs move with the logic tick, never per frame. They stop at the
+      // snake, apples and other bombs, so nothing explodes without an eat.
+      advanceBombs(state);
     }
 
     appleClock += dt * 1000 * debugSpeed;
@@ -3191,6 +3709,11 @@ document.querySelectorAll('[data-gift]').forEach((btn) => {
 window.addEventListener('keydown', (e) => {
   unlockAudio();
   if (e.repeat) return;
+  // Typing a room handle must not reset the round or fire gifts.
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(e.target?.tagName || '')) {
+    if (e.key === 'Escape') e.target.blur();
+    return;
+  }
   if (KEYS[e.key]) {
     e.preventDefault();
     sendGift(KEYS[e.key]);
@@ -3198,6 +3721,11 @@ window.addEventListener('keydown', (e) => {
     reset();
   } else if (e.key === 't' || e.key === 'T') {
     applyEnvironment(envIndex + 1);
+  } else if (e.key === 'i' || e.key === 'I') {
+    e.preventDefault();
+    setStageGuide(!stageGuideOpen);
+  } else if (e.key === 'Escape' && stageGuideOpen) {
+    setStageGuide(false);
   } else if (e.key === 'd' || e.key === 'D') {
     toggleDebug();
   }
@@ -3211,6 +3739,13 @@ hud.themeBtn?.addEventListener('click', () => {
   applyEnvironment(envIndex + 1);
 });
 
+hud.stageGuideBtn?.addEventListener('click', () => {
+  unlockAudio();
+  setStageGuide(!stageGuideOpen);
+});
+
+hud.stageGuideClose?.addEventListener('click', () => setStageGuide(false));
+
 hud.winLap.addEventListener('change', () => {
   victoryLap = hud.winLap.checked;
   applyDebug();
@@ -3220,6 +3755,8 @@ hud.winLap.addEventListener('change', () => {
 hud.dbgSound.addEventListener('change', () => {
   soundOn = hud.dbgSound.checked;
   saveSound();
+  if (soundOn && !ac) unlockAudio();
+  stageAudio.setEnabled(soundOn);
   if (ac) {
     if (soundOn) ac.resume().catch(() => {});
     else ac.suspend().catch(() => {});
@@ -3271,6 +3808,7 @@ if (window.ResizeObserver) new ResizeObserver(resize).observe(stageEl);
 // ---------- boot ----------
 applyEnvironment(0);
 layoutBoard();
+state.tickMs = stageMeta(environmentAt(envIndex).id).tickMs;
 renderTotals();
 renderLeaderboard();
 refreshRecord();
@@ -3295,5 +3833,5 @@ camera.position.copy(camBase);
 camera.lookAt(camLook);
 
 // `setEnvironment(index)` is the test hook: same path as the `T` key and the chip.
-window.__snake = { scene, camera, renderer, sendGift, reset, state: () => state, setEnvironment: applyEnvironment };
+window.__snake = { scene, camera, renderer, sendGift, reset, state: () => state, setEnvironment: applyEnvironment, tiktok: () => feed.status() };
 requestAnimationFrame(frame);

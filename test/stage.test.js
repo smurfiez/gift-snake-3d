@@ -206,14 +206,12 @@ test('tide bomb drifts three cells toward the head then stops', () => {
   state.bombs = [bomb];
   primeBomb(bomb, 'tide', { x: -1, y: 0 });
 
-  for (let i = 0; i < 3 + 3; i++) {
-    assert.equal(advanceBombs(state).length, 0);
-  }
+  for (let i = 0; i < 3 + 3; i++) advanceBombs(state);
   assert.deepEqual({ x: bomb.x, y: bomb.y }, { x: 3, y: 4 });
   assert.equal(bomb.moves, 3);
   assert.equal(bomb.spent, false);
 
-  assert.equal(advanceBombs(state).length, 0);
+  advanceBombs(state);
   assert.equal(bomb.spent, true);
   assert.deepEqual({ x: bomb.x, y: bomb.y }, { x: 3, y: 4 }, 'tide bomb kept drifting past three cells');
 });
@@ -248,7 +246,7 @@ test('barrel bomb reverses at the wall and stays in bounds', () => {
   assert.equal(bomb.spent, false);
 });
 
-test('a moving bomb that reaches the snake detonates and cuts the tail', () => {
+test('a moving bomb stops at the snake instead of detonating on it', () => {
   const state = board({
     snake: [
       { x: 5, y: 5 },
@@ -262,16 +260,31 @@ test('a moving bomb that reaches the snake detonates and cuts the tail', () => {
   state.bombs = [bomb];
   primeBomb(bomb, 'kick', { x: 1, y: 0 });
 
-  const events = [];
-  for (let i = 0; i < 8; i++) events.push(...advanceBombs(state));
+  for (let i = 0; i < 8; i++) advanceBombs(state);
 
-  assert.equal(events.length, 1);
-  assert.equal(events[0].bomb, bomb);
-  assert.deepEqual(events[0].at, { x: 4, y: 5 });
-  assert.equal(events[0].removed.length, 2);
-  assert.equal(state.bombs.includes(bomb), false);
-  assert.equal(state.bombs.length, 0);
-  assert.equal(state.snake.length, 3);
+  assert.deepEqual({ x: bomb.x, y: bomb.y }, { x: 4, y: 5 }, 'the bomb entered the snake cell');
+  assert.equal(bomb.spent, true, 'the bomb kept rolling at the snake');
+  assert.equal(state.bombs.includes(bomb), true);
+  assert.equal(state.snake.length, 5, 'the bomb cut the snake');
+});
+
+test('a tide bomb stops at the snake instead of detonating on it', () => {
+  const state = board({
+    snake: [
+      { x: 5, y: 5 },
+      { x: 5, y: 6 },
+      { x: 5, y: 7 },
+      { x: 4, y: 7 },
+    ],
+  });
+  const bomb = makeBomb(3, 5);
+  state.bombs = [bomb];
+  primeBomb(bomb, 'tide', { x: 1, y: 0 });
+
+  for (let i = 0; i < 6; i++) advanceBombs(state);
+
+  assert.deepEqual({ x: bomb.x, y: bomb.y }, { x: 4, y: 5 }, 'the tide bomb entered the snake cell');
+  assert.equal(state.snake.length, 4, 'the tide bomb cut the snake');
 });
 
 test('a static-effect bomb keeps its cell when primed with a direction', () => {
@@ -280,10 +293,9 @@ test('a static-effect bomb keeps its cell when primed with a direction', () => {
   state.bombs = [bomb];
   primeBomb(bomb, 'compost', { x: 1, y: 0 });
 
-  const events = [];
-  for (let i = 0; i < 6; i++) events.push(...advanceBombs(state));
+  for (let i = 0; i < 6; i++) advanceBombs(state);
 
-  assert.equal(events.length, 0, 'a static-effect bomb touched the snake');
+  assert.equal(state.bombs.length, 1, 'a static-effect bomb left the board');
   assert.equal(state.snake.length, 3, 'static-effect bomb cut the snake');
   assert.deepEqual({ x: bomb.x, y: bomb.y }, { x: 0, y: 4 }, 'static-effect bomb rolled');
   assert.equal(bomb.spent, true);

@@ -59,7 +59,7 @@ if (once) {
   giftMessage(scripted || GIFTS[0], count);
   setTimeout(() => process.exit(0), 500);
 } else {
-  const port = Number(process.env.PORT) || 8765;
+  const port = Number(process.env.PORT) || 9090;
   const wss = new WebSocketServer({ host: '127.0.0.1', port });
   console.log(`fake feed listening on ws://127.0.0.1:${port}`);
 

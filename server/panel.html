@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gift Effects · Gift Snake 3D</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: radial-gradient(ellipse at 50% -10%, #fffaf4 0%, #f9e6ee 52%, #f3dbe8 100%);
+        --surface: #fffaf6;
+        --surface-hi: #ffffff;
+        --surface-soft: #fffdfb;
+        --text: #4b3545;
+        --muted: #937a8c;
+        --faint: #b49cae;
+        --line: rgba(120, 82, 106, 0.16);
+        --line-strong: rgba(120, 82, 106, 0.3);
+        --magenta: #d8477f;
+        --magenta-soft: #ff8fae;
+        --good: #3f9a5f;
+        --warn: #b57b12;
+        --bad: #c0413f;
+        --focus: #cf4f82;
+        --shadow: 0 16px 34px -18px rgba(94, 56, 80, 0.3);
+        --r: 14px;
+        --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+        --sans: "Nunito", "Quicksand", ui-rounded, system-ui, sans-serif;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          color-scheme: dark;
+          --bg: radial-gradient(ellipse at 50% -10%, #241c2b 0%, #1b1421 60%, #150f1a 100%);
+          --surface: #241c2b;
+          --surface-hi: #332941;
+          --surface-soft: #221a29;
+          --text: #f7eff9;
+          --muted: #bba9c6;
+          --faint: #95829f;
+          --line: rgba(255, 255, 255, 0.12);
+          --line-strong: rgba(255, 255, 255, 0.28);
+          --magenta: #ff8fae;
+          --magenta-soft: #ff8fae;
+          --good: #8fd06a;
+          --warn: #f5c25c;
+          --bad: #ff8f8f;
+          --shadow: 0 16px 34px -18px rgba(0, 0, 0, 0.75);
+        }
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        padding: clamp(16px, 3vw, 40px);
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.5 var(--sans);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      main { max-width: 980px; margin: 0 auto; display: grid; gap: 16px; }
+
+      header { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+
+      h1 { margin: 0; font-size: clamp(22px, 3vw, 30px); letter-spacing: -0.01em; }
+      h1 span { color: var(--magenta); }
+      .sub { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+      .sub code { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+
+      .status {
+        display: inline-flex; align-items: center; gap: 8px;
+        padding: 7px 14px; border-radius: 999px;
+        background: var(--surface); border: 1px solid var(--line);
+        box-shadow: var(--shadow); font-size: 13px; font-weight: 700;
+        white-space: nowrap;
+      }
+      .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+      .status[data-state="live"] .dot { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent); }
+      .status[data-state="connecting"] .dot { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+      .status[data-state="offline"] .dot { background: var(--bad); }
+      @keyframes pulse { 50% { opacity: 0.25; } }
+      .status small { font-weight: 600; color: var(--muted); }
+
+      .banner {
+        display: grid; gap: 2px;
+        padding: 13px 16px; border-radius: var(--r);
+        background: color-mix(in srgb, var(--bad) 10%, var(--surface));
+        border: 1px solid color-mix(in srgb, var(--bad) 45%, transparent);
+        font-size: 13px;
+      }
+      .banner[hidden] { display: none; }
+      .banner[hidden] { display: none; }
+      .banner b { color: var(--bad); }
+      .banner span { color: var(--text); }
+      .banner code { font-family: var(--mono); font-size: 12px; }
+
+      .bar {        display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        padding: 10px; border-radius: var(--r);
+        background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow);
+      }
+
+      input[type="search"], select, input[type="number"] {
+        font: inherit; color: var(--text);
+        background: var(--surface-soft);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px 10px;
+      }
+
+      input[type="search"] { flex: 1 1 220px; min-width: 0; }
+      input[type="search"]::placeholder { color: var(--faint); }
+
+      .seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 10px; }
+      .seg button {
+        font: inherit; font-size: 13px; font-weight: 700; color: var(--muted);
+        background: none; border: 0; border-radius: 8px; padding: 5px 11px; cursor: pointer;
+      }
+      .seg button[aria-pressed="true"] { background: var(--surface-hi); color: var(--text); box-shadow: 0 1px 4px rgba(80, 40, 70, 0.12); }
+
+      .spacer { flex: 1; }
+
+      .save {
+        font: inherit; font-weight: 800; color: #fff;
+        background: var(--magenta); border: 0; border-radius: 10px;
+        padding: 9px 18px; cursor: pointer;
+        box-shadow: 0 10px 22px -12px color-mix(in srgb, var(--magenta) 80%, transparent);
+      }
+      .save[disabled] { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+      .save.dirty::after { content: " •"; }
+
+      .table-wrap { border-radius: var(--r); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); overflow: hidden; }
+
+      table { width: 100%; border-collapse: collapse; }
+      thead th {
+        position: sticky; top: 0; z-index: 1;
+        text-align: left; font-size: 11px; font-weight: 800; letter-spacing: 0.14em;
+        text-transform: uppercase; color: var(--faint);
+        background: var(--surface); padding: 12px 16px;
+        border-bottom: 1px solid var(--line);
+      }
+      thead th.num, td.num { text-align: right; }
+      tbody td { padding: 9px 16px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+      tbody tr:last-child td { border-bottom: 0; }
+      tbody tr:hover { background: var(--surface-soft); }
+
+      .gift { font-weight: 700; }
+      .gift small { display: block; font-weight: 600; color: var(--faint); font-family: var(--mono); font-size: 11px; }
+      .coins { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; white-space: nowrap; }
+
+      td select { width: 100%; min-width: 110px; }
+      td select.off { color: var(--faint); }
+      td.num input[type="number"] { width: 78px; text-align: right; }
+      td.num input[type="number"]:disabled { opacity: 0.4; }
+
+      .empty { padding: 42px 24px; text-align: center; color: var(--muted); }
+      .empty b { display: block; color: var(--text); margin-bottom: 6px; }
+
+      .note { margin: 0; color: var(--muted); font-size: 12.5px; }
+      .note code { font-family: var(--mono); font-size: 11.5px; }
+
+      .toast {
+        position: fixed; left: 50%; bottom: 24px; translate: -50% 0;
+        padding: 10px 18px; border-radius: 999px; font-weight: 700; font-size: 13px;
+        color: #fff; background: #3a2b38; box-shadow: 0 14px 30px -14px rgba(0, 0, 0, 0.5);
+        opacity: 0; pointer-events: none; transition: opacity 0.18s ease, translate 0.18s ease;
+      }
+      .toast.show { opacity: 1; translate: -50% -6px; }
+      .toast[data-kind="bad"] { background: var(--bad); }
+
+      :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+      @media (max-width: 620px) {
+        thead th.coins, td.coins { display: none; }
+        tbody td, thead th { padding-inline: 12px; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>Gift <span>Effects</span></h1>
+          <p class="sub">Pick the board effect each TikTok gift triggers, or map comments, likes, joins, follows and shares the same way. Saves live — the game picks it up without a reload.</p>
+        </div>
+        <div class="status" id="status" data-state="offline">
+          <span class="dot"></span>
+          <span id="status-text">connecting to bridge…</span>
+        </div>
+      </header>
+
+      <div class="banner" id="banner" hidden>
+        <b id="banner-title">Not connected to the bridge</b>
+        <span id="banner-body"></span>
+      </div>
+
+      <div class="bar">
+        <input type="search" id="search" placeholder="Filter gifts…  ( / )" autocomplete="off" aria-label="Filter gifts" />
+        <div class="seg" role="group" aria-label="Filter by mapping">
+          <button type="button" data-filter="all" aria-pressed="true">All</button>
+          <button type="button" data-filter="mapped" aria-pressed="false">Mapped</button>
+          <button type="button" data-filter="unmapped" aria-pressed="false">Unmapped</button>
+        </div>
+        <span class="spacer"></span>
+        <button type="button" class="save" id="save" disabled>Save</button>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Gift</th>
+              <th scope="col" class="coins">Coins</th>
+              <th scope="col">Effect</th>
+              <th scope="col" class="num">Items</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div class="empty" id="empty" hidden>
+          <b>No gift catalog yet</b>
+          The bridge loads the room's gifts once it joins the stream. Mappings saved earlier still apply.
+        </div>
+      </div>
+
+      <p class="note" id="foot"></p>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script>
+      const rowsEl = document.getElementById('rows');
+      const emptyEl = document.getElementById('empty');
+      const bannerEl = document.getElementById('banner');
+      const bannerTitleEl = document.getElementById('banner-title');
+      const bannerBodyEl = document.getElementById('banner-body');
+      const statusEl = document.getElementById('status');
+      const statusTextEl = document.getElementById('status-text');
+      const searchEl = document.getElementById('search');
+      const saveEl = document.getElementById('save');
+      const footEl = document.getElementById('foot');
+      const toastEl = document.getElementById('toast');
+
+      let state = { catalog: [], rules: {}, effects: [], defaultCount: {}, configPath: '' };
+      let rules = {};
+      let dirty = false;
+      let filter = 'all';
+      let query = '';
+      let savedSignature = '';
+
+      const signature = () => JSON.stringify(rules);
+      const effectOf = (id) => rules[id]?.effect || '';
+      const countFor = (effect) => state.defaultCount?.[effect] ?? 1;
+
+      function setDirty(next) {
+        dirty = next;
+        saveEl.disabled = !dirty;
+        saveEl.classList.toggle('dirty', dirty);
+        saveEl.textContent = dirty ? `Save ${Object.keys(rules).length} mappings` : 'Save';
+      }
+
+      function setStatus(status) {
+        const st = status?.state || 'offline';
+        statusEl.dataset.state = st;
+        const detail = status?.detail ? ` · ${status.detail}` : '';
+        statusTextEl.textContent = st === 'live' ? `live${detail}` : st === 'connecting' ? `connecting${detail}` : `offline${detail}`;
+      }
+
+      function showBanner(title, body) {
+        bannerTitleEl.textContent = title;
+        bannerBodyEl.textContent = body;
+        bannerEl.hidden = false;
+      }
+
+      function hideBanner() {
+        bannerEl.hidden = true;
+      }
+
+      function toast(message, kind) {
+        toastEl.textContent = message;
+        toastEl.dataset.kind = kind || 'good';
+        toastEl.classList.add('show');
+        clearTimeout(toast.timer);
+        toast.timer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+      }
+
+      const INTERACTIONS = [
+        ['comment', 'Every comment'],
+        ['like', 'Every like batch'],
+        ['join', 'Every join'],
+        ['follow', 'Every follow'],
+        ['share', 'Every share'],
+      ];
+
+      function giftRows() {
+        const byId = new Map(state.catalog.map((gift) => [String(gift.id), gift]));
+        // Interactions share the table with gifts, so they get a row each and
+        // save through the same POST. Unmapped means the page ignores the kind.
+        for (const [id, name] of INTERACTIONS) byId.set(id, { id, name, coins: 0, interaction: true });
+        for (const id of Object.keys(rules)) {
+          if (!byId.has(id)) byId.set(id, { id: Number(id), name: '', coins: 0, stale: true });
+        }
+        return [...byId.values()];
+      }
+
+      function visibleRows() {
+        const q = query.trim().toLowerCase();
+        return giftRows()
+          .filter((gift) => {
+            const id = String(gift.id);
+            const mapped = Boolean(rules[id]);
+            if (filter === 'mapped' && !mapped) return false;
+            if (filter === 'unmapped' && mapped) return false;
+            if (!q) return true;
+            return gift.name.toLowerCase().includes(q) || id.includes(q);
+          })
+          .sort((a, b) => (a.stale ? 1 : 0) - (b.stale ? 1 : 0) || a.coins - b.coins || a.name.localeCompare(b.name));
+      }
+
+      function buildCell(row, className) {
+        const cell = document.createElement('td');
+        if (className) cell.className = className;
+        row.appendChild(cell);
+        return cell;
+      }
+
+      function render() {
+        const rows = visibleRows();
+        rowsEl.replaceChildren();
+        emptyEl.hidden = state.catalog.length > 0 || rows.length > 0;
+
+        for (const gift of rows) {
+          const id = String(gift.id);
+          const tr = document.createElement('tr');
+
+          const giftCell = buildCell(tr, 'gift');
+          giftCell.textContent = gift.name || 'Saved id';
+          const meta = document.createElement('small');
+          meta.textContent = gift.interaction
+            ? 'interaction'
+            : gift.stale
+              ? `${id} · not in this room's catalog`
+              : `${id}`;
+          giftCell.appendChild(meta);
+
+          buildCell(tr, 'coins').textContent = gift.coins ? `${gift.coins}` : '—';
+
+          const effectCell = buildCell(tr);
+          const select = document.createElement('select');
+          select.className = 'off';
+          select.setAttribute('aria-label', `Effect for ${gift.name || id}`);
+          const none = document.createElement('option');
+          none.value = '';
+          none.textContent = '— none —';
+          select.appendChild(none);
+          for (const effect of state.effects) {
+            const option = document.createElement('option');
+            option.value = effect;
+            option.textContent = effect;
+            select.appendChild(option);
+          }
+          select.value = effectOf(id);
+
+          const countCell = buildCell(tr, 'num');
+          const count = document.createElement('input');
+          count.type = 'number';
+          count.min = '1';
+          count.max = '999';
+          count.step = '1';
+          count.value = rules[id]?.count ?? countFor(select.value);
+          count.disabled = !select.value;
+          count.setAttribute('aria-label', `Items per gift for ${gift.name || id}`);
+
+          const applyState = () => {
+            select.className = select.value ? '' : 'off';
+            count.disabled = !select.value;
+          };
+
+          select.addEventListener('change', () => {
+            if (!select.value) {
+              delete rules[id];
+              count.value = 1;
+            } else {
+              rules[id] = { effect: select.value, count: Number(count.value) || countFor(select.value) };
+            }
+            applyState();
+            setDirty(signature() !== savedSignature);
+          });
+
+          count.addEventListener('input', () => {
+            if (!select.value) return;
+            const next = Math.max(1, Math.min(999, Math.round(Number(count.value) || 1)));
+            rules[id] = { effect: select.value, count: next };
+            setDirty(signature() !== savedSignature);
+          });
+          count.addEventListener('blur', () => {
+            if (!select.value) return;
+            count.value = Math.max(1, Math.min(999, Math.round(Number(count.value) || 1)));
+          });
+
+          effectCell.appendChild(select);
+          countCell.appendChild(count);
+          rowsEl.appendChild(tr);
+        }
+
+        setDirty(dirty);
+        footEl.textContent = '';
+        const mapped = Object.keys(rules).length;
+        footEl.append(
+          `Gifts in room: ${state.catalog.length} · Mapped: ${mapped}`,
+          state.configPath ? ` · Writing to ` : '',
+        );
+        if (state.configPath) {
+          const code = document.createElement('code');
+          code.textContent = state.configPath;
+          footEl.appendChild(code);
+        }
+      }
+
+      async function load(force) {
+        let next;
+        try {
+          const response = await fetch('/api/state', { cache: 'no-store' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          next = await response.json();
+        } catch {
+          setStatus({ state: 'offline', detail: 'panel cannot reach bridge' });
+          showBanner(
+            'Not connected to the bridge',
+            `This page is ${location.origin}. Start the bridge with "npm run bridge", then open the panel at the URL it prints: http://127.0.0.1:9091, or 9092-9094 when those ports are taken. A copy opened from the game server or from disk cannot save.`,
+          );
+          return;
+        }
+        setStatus(next.status);
+        hideBanner();
+        const catalogChanged = JSON.stringify(next.catalog) !== JSON.stringify(state.catalog);
+        state = next;
+        if (!dirty || force) {
+          rules = Object.fromEntries(Object.entries(next.rules || {}).map(([id, rule]) => [id, { ...rule }]));
+          savedSignature = signature();
+          setDirty(false);
+          render();
+        } else if (catalogChanged) {
+          render();
+        }
+      }
+
+      saveEl.addEventListener('click', async () => {
+        saveEl.disabled = true;
+        try {
+          const response = await fetch('/api/rules', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rules }),
+          });
+          let body = null;
+          try { body = await response.json(); } catch { body = null; }
+          if (!response.ok || !body?.ok) {
+            throw new Error(body?.error || `HTTP ${response.status} from the bridge`);
+          }
+          rules = Object.fromEntries(Object.entries(body.rules).map(([id, rule]) => [id, { ...rule }]));
+          savedSignature = signature();
+          setDirty(false);
+          render();
+          toast('Saved — the game is using it now');
+        } catch (err) {
+          const offline = err instanceof TypeError;
+          if (offline) setStatus({ state: 'offline', detail: 'bridge not reachable' });
+          const reason = offline ? 'bridge not reachable — is server/bridge.py running?' : err.message;
+          toast(`Save failed: ${reason}`, 'bad');
+          console.error('[gift panel] save failed', err);
+          setDirty(true);
+        }
+      });
+
+      for (const button of document.querySelectorAll('.seg button')) {
+        button.addEventListener('click', () => {
+          filter = button.dataset.filter;
+          for (const other of document.querySelectorAll('.seg button')) {
+            other.setAttribute('aria-pressed', String(other === button));
+          }
+          render();
+        });
+      }
+
+      searchEl.addEventListener('input', () => {
+        query = searchEl.value;
+        render();
+      });
+
+      document.addEventListener('keydown', (event) => {
+        if (event.key === '/' && document.activeElement !== searchEl) {
+          event.preventDefault();
+          searchEl.focus();
+        } else if (event.key === 'Escape' && document.activeElement === searchEl) {
+          searchEl.value = '';
+          query = '';
+          render();
+        }
+      });
+
+      window.addEventListener('beforeunload', (event) => {
+        if (!dirty) return;
+        event.preventDefault();
+        event.returnValue = '';
+      });
+
+      load(true);
+      setInterval(() => load(false), 4000);
+    </script>
+  </body>
+</html>

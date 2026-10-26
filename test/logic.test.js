@@ -725,3 +725,44 @@ test('every seeded round ends instead of stalling', () => {
     if (state.won) assert.equal(state.snake.length, state.w * state.h);
   }
 });
+
+// Everything that lands on the board, or moves on it, aims at empty cells first.
+// These two pin the intent for the crowded case where free cells still exist.
+function crowdedBoard() {
+  const state = createState(() => 0.5);
+  state.w = 4;
+  state.h = 4;
+  state.snake = [
+    { x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 }, { x: 3, y: 0 },
+    { x: 3, y: 1 }, { x: 3, y: 2 }, { x: 3, y: 3 }, { x: 2, y: 3 },
+    { x: 1, y: 3 }, { x: 0, y: 3 }, { x: 0, y: 2 }, { x: 1, y: 2 },
+  ];
+  state.dir = { x: 0, y: -1 };
+  state.apples = [];
+  state.bombs = [];
+  return state;
+}
+
+test('a gift bomb targets a free cell while the board still has one', () => {
+  const state = crowdedBoard();
+  const free = new Set(['0,1', '1,1', '2,1', '2,2']);
+  for (let i = 0; i < 20; i++) {
+    const res = applyGift(state, 'bomb');
+    assert.equal(res.ok, true);
+    const k = `${res.cell.x},${res.cell.y}`;
+    assert.ok(free.has(k), `bomb targeted ${k}, which is not empty`);
+  }
+});
+
+test('a gift apple lands on a free cell while the board still has one', () => {
+  const state = crowdedBoard();
+  const free = new Set(['0,1', '1,1', '2,1', '2,2']);
+  for (let i = 0; i < 20; i++) {
+    const apple = spawnGiftApple(state);
+    assert.ok(apple, 'gift apple was refused on a board with free cells');
+    const k = `${apple.x},${apple.y}`;
+    assert.ok(free.has(k), `apple landed on ${k}, which is not empty`);
+    const at = state.apples.indexOf(apple);
+    if (at >= 0) state.apples.splice(at, 1);
+  }
+});

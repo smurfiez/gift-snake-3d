@@ -1,4 +1,8 @@
 .DS_Store
 node_modules/
 .opencode/
+.venv/
+__pycache__/
 shot*.png
+server/gift-effects.json
+server/logs/

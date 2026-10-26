@@ -9,8 +9,8 @@
 
 Use OpenCode's built-in browser tools for all manual and visual testing. Do not use the Chrome DevTools MCP or external browser automation.
 
-- Serve the project with `python3 -m http.server 5199` from the project root.
-- Open `http://localhost:5199/index.html` in a built-in browser tab.
+- Serve the project with `python3 -m http.server 9010` from the project root.
+- Open `http://localhost:9010/index.html` in a built-in browser tab.
 - Focus the tab before taking a screenshot.
 - `window.__snake` exposes `{ scene, camera, renderer, sendGift, reset, state }` for driving and inspecting the game.
-- Port 5199 is reserved for this project; port 5173 may be taken by another app's service worker.
+- Ports 9010 (game), 9090 (bridge socket) and 9091 (gift panel) are reserved for this project.

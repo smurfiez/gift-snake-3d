@@ -187,18 +187,66 @@
         color: var(--faint);
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
       }
+      /* Stage progress meter. Fixed track height and a 0% fill, so updating the
+         width never shifts the stats card. */
+      .stage-meter {
+        width: 100%; min-width: 0;
+        margin-top: clamp(3px, 0.5cqh, 6px);
+      }
+      .stage-meter-head {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: clamp(4px, 0.6cqw, 8px); min-width: 0;
+        font-size: var(--t-micro); font-weight: 800; letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      #stage-meter-label {
+        min-width: 0;
+        text-transform: uppercase;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      #stage-meter-pct {
+        flex: none;
+        color: var(--text);
+        font-variant-numeric: tabular-nums;
+      }
+      .stage-meter-track {
+        margin-top: 3px; height: clamp(5px, 0.7cqh, 6px);
+        border-radius: 99px; overflow: hidden;
+        background: var(--line);
+        box-shadow: inset 0 0 0 1px var(--line-strong);
+      }
+      #stage-meter-fill {
+        display: block; width: 0%; height: 100%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, var(--blue), var(--focus));
+        transition: width 180ms ease;
+      }
+      .stats-actions {
+        display: flex; align-items: center; gap: clamp(4px, 0.6cqw, 8px);
+        margin-top: clamp(2px, 0.3cqh, 4px);
+        padding-top: clamp(4px, 0.55cqh, 8px);
+        border-top: 1px solid var(--line);
+      }
       .stats-foot {
+        flex: 1; min-width: 0;
         display: flex; align-items: center; justify-content: space-between;
         gap: clamp(6px, 0.8cqw, 12px);
-        margin-top: clamp(2px, 0.3cqh, 4px);
-        padding: clamp(4px, 0.55cqh, 8px) 0 0;
-        border: 0; border-top: 1px solid var(--line);
-        background: none; color: var(--faint);
+        padding: 0; border: 0; background: none; color: var(--faint);
         font-family: inherit; font-size: var(--t-micro); font-weight: 800; letter-spacing: 0.08em;
         text-align: left;
         white-space: nowrap; overflow: hidden;
         cursor: pointer; pointer-events: auto;
       }
+      .stats-guide-btn {
+        flex: none; min-width: clamp(16px, 1.7cqh, 24px); height: clamp(16px, 1.7cqh, 24px);
+        display: grid; place-items: center; padding: 0;
+        border: 1px solid var(--line-strong); border-radius: 6px;
+        background: var(--surface-hi); color: var(--muted);
+        font: inherit; font-size: var(--t-micro); font-weight: 900;
+        cursor: pointer; pointer-events: auto;
+        box-shadow: 0 2px 0 rgba(94, 56, 80, 0.12);
+      }
+      .stats-guide-btn:hover { color: var(--text); border-color: var(--focus); }
       .stats-foot:hover { color: var(--muted); }
       .stats-foot:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
       .stats-foot span { overflow: hidden; text-overflow: ellipsis; }
@@ -515,6 +563,126 @@
           0 7px 14px rgba(94, 56, 80, 0.16);
       }
 
+      /* Stage intro card. Sits in the gap between the top HUD and the
+         countdown disc, so it clears both the stats card and the gift deck. */
+      .stage-intro {
+        position: absolute; left: 50%; top: 22.5%; z-index: 5;
+        max-width: min(78%, 340px);
+        padding: clamp(9px, 1.2cqh, 16px) clamp(12px, 1.4cqw, 20px);
+        text-align: center;
+        color: var(--text);
+        border: 1px solid var(--line-strong);
+        border-radius: var(--r-tile);
+        background: var(--card-grad);
+        box-shadow: 0 18px 40px -24px rgba(94, 56, 80, 0.5);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
+        opacity: 0; pointer-events: none;
+        transform: translate(-50%, -8px);
+        transition: opacity 180ms ease, transform 180ms ease;
+      }
+      .stage-intro.show { opacity: 1; transform: translate(-50%, 0); }
+      .stage-intro-kicker {
+        display: block;
+        font-size: var(--t-micro); font-weight: 800; letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .stage-intro h2 {
+        margin: clamp(3px, 0.5cqh, 6px) 0 0;
+        font-size: clamp(20px, 3.4cqw, 40px);
+        font-weight: 900; line-height: 1.04; letter-spacing: 0.02em;
+        color: var(--text);
+      }
+      #stage-intro-apple, #stage-intro-bomb {
+        display: inline-block;
+        margin: clamp(4px, 0.6cqh, 8px) 0 0;
+        font-size: var(--t-xs); font-weight: 700; letter-spacing: 0.06em;
+        color: var(--muted);
+      }
+      #stage-intro-bomb::before {
+        content: "·"; margin: 0 0.5em;
+        color: var(--faint);
+      }
+      .stage-intro-passive, .stage-intro-event {
+        margin: clamp(5px, 0.7cqh, 9px) 0 0;
+        font-size: var(--t-micro); line-height: 1.4; font-weight: 600;
+        color: var(--muted);
+      }
+      .stage-intro-event { color: var(--muted); font-weight: 800; }
+
+      /* Stage guide: a readable reference the viewer may open at any time.
+         The stream keeps running behind it; closing returns focus to the chip. */
+      .stage-guide {
+        position: absolute; inset: 7% 5%; z-index: 9;
+        display: none; flex-direction: column; gap: clamp(6px, 0.8cqh, 10px);
+        padding: clamp(10px, 1.4cqh, 18px) clamp(10px, 1.4cqw, 18px);
+        border: 1px solid var(--line-strong); border-radius: var(--r-panel);
+        background: var(--card-grad); color: var(--text);
+        box-shadow: 0 26px 60px -28px rgba(35, 20, 30, 0.65);
+        backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+      }
+      .stage-guide.show { display: flex; }
+      .stage-guide-head {
+        display: flex; align-items: flex-start; justify-content: space-between;
+        gap: 10px;
+      }
+      .stage-guide-kicker {
+        display: block; font-size: var(--t-micro); font-weight: 800;
+        letter-spacing: 0.18em; color: var(--muted); text-transform: uppercase;
+      }
+      .stage-guide h2 {
+        margin: 2px 0 0; font-size: clamp(17px, 3cqw, 30px);
+        font-weight: 900; line-height: 1.05; letter-spacing: 0.02em;
+      }
+      .stage-guide-close {
+        flex: none; width: clamp(22px, 2.4cqh, 30px); height: clamp(22px, 2.4cqh, 30px);
+        display: grid; place-items: center; padding: 0;
+        border: 1px solid var(--line-strong); border-radius: 8px;
+        background: var(--surface-hi); color: var(--text);
+        font: inherit; font-size: var(--t-sm); font-weight: 900; cursor: pointer;
+      }
+      .stage-guide-close:hover { border-color: var(--focus); }
+      .stage-guide-hint {
+        margin: 0; font-size: var(--t-micro); line-height: 1.4;
+        font-weight: 600; color: var(--muted);
+      }
+      .stage-guide-list {
+        margin: 0; padding: 0 2px 0 0; list-style: none;
+        display: grid; gap: clamp(5px, 0.7cqh, 8px);
+        overflow-y: auto; overscroll-behavior: contain; min-height: 0;
+      }
+      .stage-guide-item {
+        padding: clamp(6px, 0.9cqh, 10px) clamp(8px, 1cqw, 12px);
+        border: 1px solid var(--line); border-radius: var(--r-tile);
+        background: var(--surface-soft);
+      }
+      .stage-guide-item.current {
+        border-color: var(--focus);
+        box-shadow: inset 0 0 0 1px var(--focus);
+      }
+      .stage-guide-item-top {
+        display: flex; align-items: baseline; justify-content: space-between;
+        gap: 8px; margin-bottom: 2px;
+      }
+      .stage-guide-item-top b {
+        font-size: var(--t-xs); font-weight: 900; letter-spacing: 0.04em;
+      }
+      .stage-guide-item-top span {
+        flex: none; font-size: var(--t-micro); font-weight: 800;
+        letter-spacing: 0.1em; color: var(--muted); text-transform: uppercase;
+      }
+      .stage-guide-item p {
+        margin: 2px 0 0; font-size: var(--t-micro); line-height: 1.38;
+        font-weight: 600; color: var(--muted);
+      }
+      .stage-guide-item .sg-rules { color: var(--text); font-weight: 700; }
+      .stage-guide-item .sg-event { font-weight: 800; }
+      @container (max-width: 380px) {
+        .stage-guide { inset: 5% 4%; }
+        .stage-guide-hint { display: none; }
+      }
+
       /* Countdowns sit in a disc so the number and label can never collide with
          the board or run past the stage edge. */
       .countdown {
@@ -602,6 +770,13 @@
         border: 1px solid var(--line); background: var(--surface-hi); color: var(--text);
         font: inherit; font-weight: 700;
       }
+      .debug-row input[type="text"] {
+        width: 92px; padding: 2px 6px; border-radius: 8px;
+        border: 1px solid var(--line); background: var(--surface-hi); color: var(--text);
+        font: inherit; font-weight: 700; cursor: text;
+      }
+      .debug-row input[type="text"]::placeholder { color: var(--faint); font-weight: 600; }
+      #dbg-room-go { margin-left: 0; }
 
       /* ---------- focus + scrollbars ---------- */
 
@@ -645,6 +820,20 @@
         .log ul { gap: 4px; }
         #log li { padding: 4px 6px; font-size: clamp(8px, 1.1cqh, 11px); }
         .toasts { width: min(280px, 76cqw); left: 10px; bottom: 10px; }
+        .stage-intro { top: 22%; }
+      }
+
+      /* Short or narrow frames push the stats card lower, so the intro card
+         drops with it instead of covering the meter and footer. */
+      @container (max-width: 380px) or (max-height: 620px) {
+        .stage-intro {
+          top: 24.5%;
+          max-width: 70%;
+          padding: clamp(6px, 0.9cqh, 11px) clamp(9px, 1.2cqw, 15px);
+        }
+        .stage-intro-kicker { letter-spacing: 0.14em; }
+        .stage-intro h2 { font-size: clamp(17px, 3.2cqw, 28px); }
+        .stage-intro-passive, .stage-intro-event { line-height: 1.35; }
       }
 
       /* ---------- reduced motion ---------- */
@@ -656,6 +845,7 @@
           transition-duration: 0.001ms !important;
         }
         .banner { transform: translate(-50%, -50%) scale(1); }
+        .stage-intro { transition: opacity 0.001ms linear; transform: translate(-50%, 0); }
       }
     </style>
   </head>
@@ -672,7 +862,14 @@
           <div class="stats-row"><span>APPLES</span><b id="stat-apples">0</b></div>
           <div class="stats-row"><span>BOMBS</span><b id="stat-bombs">0</b></div>
           <div class="stats-rule" id="stat-rule">Surf pair · Tide bomb</div>
-          <button class="stats-foot" id="stat-theme-btn" type="button" aria-keyshortcuts="T" aria-label="Change environment"><span id="stat-theme">BEACH</span><kbd class="key">T</kbd></button>
+          <div class="stage-meter" id="stage-meter" role="progressbar" aria-label="Stage event charge" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div class="stage-meter-head"><span id="stage-meter-label">TIDE SURGE</span><span id="stage-meter-pct">0%</span></div>
+            <div class="stage-meter-track"><i id="stage-meter-fill"></i></div>
+          </div>
+          <div class="stats-actions">
+            <button class="stats-foot" id="stat-theme-btn" type="button" aria-keyshortcuts="T" aria-label="Change environment"><span id="stat-theme">BEACH</span><kbd class="key">T</kbd></button>
+            <button class="stats-guide-btn" id="stage-guide-btn" type="button" aria-keyshortcuts="I" aria-haspopup="dialog" aria-controls="stage-guide" aria-label="Open stage guide" title="Stage guide (I)">i</button>
+          </div>
         </section>
       </header>
 
@@ -684,6 +881,27 @@
       </div>
 
       <div class="winsummary" id="win-summary" aria-hidden="true"></div>
+
+      <div class="stage-intro" id="stage-intro" role="status" aria-live="polite" aria-atomic="true">
+        <span class="stage-intro-kicker" id="stage-intro-kicker">STAGE 1 / 8 · CALM</span>
+        <h2 id="stage-intro-name">BEACH</h2>
+        <p id="stage-intro-apple">Surf pair</p>
+        <p id="stage-intro-bomb">Tide bomb</p>
+        <p class="stage-intro-passive" id="stage-intro-passive">Tide: every 7s the surf drags fruit and bombs one cell.</p>
+        <p class="stage-intro-event" id="stage-intro-event">Next event: Tide Surge</p>
+      </div>
+
+      <section class="stage-guide" id="stage-guide" role="dialog" aria-modal="true" aria-labelledby="stage-guide-title" aria-hidden="true">
+        <header class="stage-guide-head">
+          <div>
+            <span class="stage-guide-kicker">Rules reference</span>
+            <h2 id="stage-guide-title">STAGE GUIDE</h2>
+          </div>
+          <button class="stage-guide-close" id="stage-guide-close" type="button" aria-label="Close stage guide">×</button>
+        </header>
+        <p class="stage-guide-hint">Gifts charge the meter. Passives run on their own timer. Events fire when the meter fills.</p>
+        <ol class="stage-guide-list" id="stage-guide-list"></ol>
+      </section>
 
       <div class="debug" id="debug" aria-hidden="true">
         <div class="debug-head">DEBUG · D</div>
@@ -711,6 +929,11 @@
           <input type="checkbox" id="dbg-tiktok" />
           <span>TikTok gifts</span>
           <button type="button" class="debug-state" id="dbg-tiktok-state" title="TikTok bridge status">off</button>
+        </label>
+        <label class="debug-row">
+          <span>Room</span>
+          <input type="text" id="dbg-room" autocomplete="off" spellcheck="false" placeholder="handle" aria-label="TikTok room handle" />
+          <button type="button" class="debug-state" id="dbg-room-go" title="Reconnect the bridge, optionally to this room">reconnect</button>
         </label>
         <label class="debug-row">
           <span>Speed</span>
@@ -792,6 +1015,22 @@
     </footer>
     </div>
 
+    <script>
+      // game.js owns the meter numbers; mirror its visible text into ARIA values.
+      (() => {
+        const meter = document.getElementById('stage-meter');
+        const pct = document.getElementById('stage-meter-pct');
+        const label = document.getElementById('stage-meter-label');
+        if (!meter || !pct || !label) return;
+        const sync = () => {
+          const value = Math.round(parseFloat(pct.textContent) || 0);
+          meter.setAttribute('aria-valuenow', String(value));
+          meter.setAttribute('aria-valuetext', `${value}% ${label.textContent.toLowerCase()}`);
+        };
+        new MutationObserver(sync).observe(pct, { childList: true, characterData: true, subtree: true });
+        sync();
+      })();
+    </script>
     <script type="importmap">
       {
         "imports": {

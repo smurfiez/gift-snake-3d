@@ -16,7 +16,8 @@ export const CONFIG = Object.freeze({
   maxApples: 5,
   giftApples: 1,
   bombCut: 2,
-  maxBombs: 3,
+  // Must cover the biggest gift volley: Doughnut drops 50 bombs at once.
+  maxBombs: 60,
   restartMs: 3000,
   // After the board fills, the snake keeps moving for this long before the win
   // is awarded, so the round ends on a visible victory lap instead of a freeze.
@@ -751,14 +752,16 @@ export function bombAt(state, p) {
 // Bombs live on the board like apples and only act when the snake eats one.
 // A dropped bomb is not a board object yet: it only becomes one on landing, so
 // it cannot be eaten, targeted or counted while it is still falling.
-export function pickBombCell(state) {
+// `exclude` holds cells already queued by the same gift volley.
+export function pickBombCell(state, exclude = null) {
   if (!Array.isArray(state.bombs)) state.bombs = [];
   if (state.bombs.length >= CONFIG.maxBombs) return null;
 
   // A gifted bomb lands just ahead of the head when it can, so the snake eats it
   // almost immediately, and drops to a random free cell otherwise.
   const rand = state.rand ?? Math.random;
-  const ahead = upcomingCells(state, 4);
+  const open = (c) => !exclude || !exclude.has(key(c));
+  const ahead = upcomingCells(state, exclude ? exclude.size + 4 : 4).filter(open);
   if (ahead.length && rand() < 0.9) return ahead[Math.floor(rand() * ahead.length)];
 
   const taken = new Set([
@@ -769,7 +772,7 @@ export function pickBombCell(state) {
   const free = [];
   for (let y = 0; y < state.h; y++) {
     for (let x = 0; x < state.w; x++) {
-      if (!taken.has(`${x},${y}`)) free.push({ x, y });
+      if (!taken.has(`${x},${y}`) && open({ x, y })) free.push({ x, y });
     }
   }
   if (!free.length) return null;
@@ -831,7 +834,9 @@ function bombStep(state, bomb) {
   const next = { x: bomb.x + bomb.dir.x, y: bomb.y + bomb.dir.y };
   const k = key(next);
   if (!inBounds(state, next)) return 'wall';
-  if (state.snake.some((s) => key(s) === k)) return 'snake';
+  // A moving item only ever enters an empty cell, so the snake blocks a bomb the
+  // way a wall does instead of detonating under it.
+  if (state.snake.some((s) => key(s) === k)) return 'blocked';
   if (state.apples.some((a) => key(a) === k)) return 'blocked';
   if (state.bombs.some((b) => b !== bomb && key(b) === k)) return 'blocked';
   bomb.x = next.x;
@@ -839,16 +844,10 @@ function bombStep(state, bomb) {
   return 'moved';
 }
 
-function detonateBomb(state, bomb, events) {
-  const at = { x: bomb.x, y: bomb.y };
-  const removed = eatBomb(state, bomb);
-  events.push({ bomb, removed, at });
-}
-
-// One logic tick of stage bomb motion. Static bombs never enter this path.
-// Returns the bombs that touched the snake so the renderer can explode them.
+// One logic tick of stage bomb motion. Static bombs never enter this path, and a
+// moving bomb never enters a cell that is not empty: it stops, or a barrel
+// bounces, exactly as it does at a wall.
 export function advanceBombs(state) {
-  const events = [];
   for (const bomb of (state.bombs || []).slice()) {
     if (bomb.spent || !bomb.rule || bomb.rule === 'static') continue;
     if (!state.bombs.includes(bomb)) continue;
@@ -880,8 +879,7 @@ export function advanceBombs(state) {
         continue;
       }
       const moved = bombStep(state, bomb);
-      if (moved === 'snake') detonateBomb(state, bomb, events);
-      else if (moved === 'moved') bomb.moves++;
+      if (moved === 'moved') bomb.moves++;
       else bomb.spent = true;
       continue;
     }
@@ -898,10 +896,6 @@ export function advanceBombs(state) {
       continue;
     }
     let moved = bombStep(state, bomb);
-    if (moved === 'snake') {
-      detonateBomb(state, bomb, events);
-      continue;
-    }
     if (moved === 'moved') {
       bomb.moves++;
       continue;
@@ -914,7 +908,6 @@ export function advanceBombs(state) {
     }
     bomb.spent = true;
   }
-  return events;
 }
 
 export function step(state) {
@@ -1007,7 +1000,7 @@ function growBoard(state, type) {
   return { type, ok, w: state.w, h: state.h };
 }
 
-export function applyGift(state, type) {
+export function applyGift(state, type, exclude = null) {
   if (type === 'widen' || type === 'taller') return growBoard(state, type);
   if (state.dead || state.won) return { type, ok: false };
 
@@ -1025,7 +1018,7 @@ export function applyGift(state, type) {
       // bomb is not on the board (and not edible) while it is falling. With no
       // free cell or the board already at the cap, the bomb is still delivered:
       // it lands on the snake and detonates there.
-      const cell = pickBombCell(state);
+      const cell = pickBombCell(state, exclude);
       if (cell) return { type, ok: true, cell };
       const body = state.snake[Math.floor((state.rand ?? Math.random)() * state.snake.length)];
       const onBody = body || state.snake[0];
