@@ -112,6 +112,13 @@
         box-shadow: 0 30px 80px -30px rgba(74, 40, 62, 0.55);
       }
 
+      /* Stream mode (?stream=1): fill the whole window so an app-mode capture has no letterbox. */
+      html[data-stream] .frame {
+        width: 100vw;
+        height: 100dvh;
+        box-shadow: none;
+      }
+
       ::selection { background: rgba(255, 143, 174, 0.3); color: var(--text); }
 
       /* ---------- stage: the whole frame ---------- */
@@ -850,6 +857,9 @@
     </style>
   </head>
   <body>
+    <script>
+      if (new URLSearchParams(location.search).has('stream')) document.documentElement.dataset.stream = '';
+    </script>
     <div class="frame">
     <div class="stage">
       <div id="app"></div>
@@ -912,6 +922,14 @@
         <label class="debug-row">
           <input type="checkbox" id="dbg-sound" checked />
           <span>Sound</span>
+        </label>
+        <label class="debug-row">
+          <input type="checkbox" id="dbg-keys" checked />
+          <span>Keypress</span>
+        </label>
+        <label class="debug-row">
+          <input type="checkbox" id="dbg-ambient" checked />
+          <span>Ambient</span>
         </label>
         <label class="debug-row">
           <input type="checkbox" id="dbg-gifts" />
@@ -1039,5 +1057,21 @@
       }
     </script>
     <script type="module" src="./src/game.js"></script>
+    <script>
+      // Dev only: reload when a watched file changes (scripts/dev_server.py).
+      if (location.protocol === "http:") {
+        let seen = null;
+        const tick = async () => {
+          let v;
+          try {
+            v = await (await fetch("/__reload/version", { cache: "no-store" })).text();
+          } catch { return; }
+          if (seen === null) seen = v;
+          else if (v !== seen) return location.reload();
+          setTimeout(tick, 800);
+        };
+        tick();
+      }
+    </script>
   </body>
 </html>

@@ -73,7 +73,7 @@ Each stage now has its own gift silhouettes: coconut, stitched ball, gold idol, 
 
 ## TikTok gifts (local bridge)
 
-The page opens `ws://127.0.0.1:9090` only when the `TikTok gifts` debug toggle is on. Nothing connects while the toggle is off. The Python bridge in `server/bridge.py` joins a TikTok LIVE room, forwards each gift combo to the page as it arrives, and serves a panel at `http://127.0.0.1:9091` where each gift is mapped to a board effect. For the full protocol, mapping rules and failure behaviour, see [`docs/tiktok-gift-integration.md`](docs/tiktok-gift-integration.md).
+The page opens `ws://127.0.0.1:9090` only when the `TikTok gifts` debug toggle is on. Nothing connects while the toggle is off. The Python bridge in `server/bridge.py` joins a TikTok LIVE room, forwards each gift combo to the page as it arrives, and serves a panel at `http://127.0.0.1:9091` where each gift is mapped to a board effect and a live feed shows the events the bridge is forwarding. For the full protocol, mapping rules and failure behaviour, see [`docs/tiktok-gift-integration.md`](docs/tiktok-gift-integration.md).
 
 Setup:
 
@@ -129,7 +129,7 @@ The bridge uses the unofficial TikTok API, so it can break when TikTok changes i
 - Filling the board starts a 10 second victory lap with a large countdown: the snake keeps moving, the length stops changing, and a bomb cut during the lap cancels the pending win. When the clock runs out the round shows STREAMER WINS, counts 3 seconds, and restarts by itself.
 - A self-collision ends the round immediately as a normal crash: there is no rescue window and no way to buy the snake back.
 - After a crash the next round starts automatically after 3 seconds.
-- Sound can be switched off from the debug menu; that setting is stored in the browser and survives a reload. The other debug toggles (victory lap, random gifts, speed) are stored the same way.
+- The debug menu has a separate switch for game sound, keypress clicks and stage ambience; each setting is stored in the browser and survives a reload. The other debug toggles (victory lap, random gifts, speed) are stored the same way.
 - The header stats card keeps a running wins / losses record across rounds; it is stored in the browser so it survives a reload. Only a real win or a real crash counts — `R` abandons the round without scoring.
 
 ## Tests

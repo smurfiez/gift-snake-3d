@@ -11,11 +11,14 @@ Run log:    server/logs/bridge.log
 """
 
 import asyncio
+import itertools
 import json
 import logging
 import os
 import sys
 import threading
+import time
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
@@ -96,6 +99,9 @@ LOOP = None
 # The loop can be restarted by a reconnect request, so its client, task and a
 # generation counter live here rather than inside the coroutine.
 ROOM = {"generation": 0, "client": None, "task": None, "failures": 0, "wake": None}
+# The panel polls /api/events?since=N; a bounded buffer keeps that cheap.
+FEED = deque(maxlen=100)
+FEED_SEQ = itertools.count(1)
 
 
 # ---------- state plumbing ----------
@@ -109,6 +115,28 @@ def panel_state():
         "defaultCount": DEFAULT_COUNT,
         "configPath": CONFIG_PATH,
     }
+
+
+def record_event(key, kind, label, who, count=None):
+    """One feed line, resolved against the rule table at the moment it arrived."""
+    rule = STATE["rules"].get(str(key))
+    entry = {
+        "id": next(FEED_SEQ),
+        "at": time.strftime("%H:%M:%S"),
+        "kind": kind,
+        "label": label,
+        "user": who["uniqueId"],
+        "count": count,
+        "effect": rule["effect"] if rule else None,
+        "items": rule["count"] if rule else None,
+    }
+    FEED.append(entry)
+    return entry
+
+
+def feed_since(since):
+    events = [event for event in list(FEED) if event["id"] > since]
+    return {"seq": events[-1]["id"] if events else since, "events": events}
 
 
 def encode(msg):
@@ -191,11 +219,20 @@ class PanelHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        path = self.path.split("?")[0]
+        path, _, query = self.path.partition("?")
         if path in ("/", "/index.html", "/panel.html"):
             self._page()
         elif path == "/api/state":
             self._json(200, panel_state())
+        elif path == "/api/events":
+            since = 0
+            for part in query.split("&"):
+                if part.startswith("since="):
+                    try:
+                        since = int(part[6:] or 0)
+                    except ValueError:
+                        since = 0
+            self._json(200, feed_since(since))
         else:
             self.send_error(404)
 
@@ -321,6 +358,7 @@ async def publish_interaction(kind, event, text=None, count=None):
     if count is not None:
         msg["count"] = int(count)
     await broadcast(msg)
+    record_event(kind, kind, kind, who, count)
     extra = f' "{text}"' if text else (f" x{count}" if count else "")
     log(f"{kind} @{who['uniqueId']}{extra} -> {effect_label(kind)}")
 
@@ -387,6 +425,7 @@ def make_client():
                 "user": who,
             }
         )
+        record_event(gift_id, "gift", name or f"Gift {gift_id}", who, count)
         log(
             f"gift {gift_id} {name} x{count} @{who['uniqueId']} "
             f"({diamond} coins) -> {effect_label(str(gift_id))}"
@@ -398,9 +437,9 @@ def make_client():
 
     @client.on(LikeEvent)
     async def on_like(event):
-        # TikTok sends one message per like batch; likes are not coalesced here,
-        # so a busy room writes one line and one socket message per batch.
-        await publish_interaction("like", event, count=max(1, int(event.count or 1)))
+        # TikTok reports likes in batches; split them so each like pays out once.
+        for _ in range(max(1, int(event.count or 1))):
+            await publish_interaction("like", event, count=1)
 
     @client.on(JoinEvent)
     async def on_join(event):

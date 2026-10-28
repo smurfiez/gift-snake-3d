@@ -88,14 +88,15 @@ increment. `coins` is the gift's diamond value times the count.
 
 ```json
 { "t": "interaction", "kind": "comment", "user": { "uniqueId": "nova", "nickname": "Nova" }, "text": "hi snake" }
-{ "t": "interaction", "kind": "like", "count": 7, "user": { "uniqueId": "kito", "nickname": "Kito" } }
+{ "t": "interaction", "kind": "like", "count": 1, "user": { "uniqueId": "kito", "nickname": "Kito" } }
 ```
 
 `kind` is one of `comment`, `like`, `join`, `follow`, `share`. `text` only
 appears on comments, collapsed to one line and cut at 120 characters. `count`
-only appears on likes and is the size of that like batch. The page turns a
-`kind` into a board effect only when the panel maps it; an unmapped kind is
-dropped silently, so the `ignored` counter stays about gifts.
+only appears on likes; the bridge splits TikTok's like batches, so it is always
+`1` and each like is its own message. The page turns a `kind` into a board
+effect only when the panel maps it; an unmapped kind is dropped silently, so the
+`ignored` counter stays about gifts.
 
 `status` also carries `user`, the handle the bridge is joined to, so the page can
 show the current room.
@@ -141,7 +142,7 @@ The bridge subscribes to five more room events and forwards each as an
 | Kind | TikTokLive event | Carries | Log line |
 | --- | --- | --- | --- |
 | `comment` | `CommentEvent` | `text` | `comment @nova "hi snake" -> …` |
-| `like` | `LikeEvent` | `count` (batch size) | `like @nova x7 -> …` |
+| `like` | `LikeEvent` | — | `like @nova -> …` |
 | `join` | `JoinEvent` | — | `join @nova -> …` |
 | `follow` | `FollowEvent` | — | `follow @nova -> …` |
 | `share` | `ShareEvent` | — | `share @nova -> …` |
@@ -158,11 +159,11 @@ the same `server/gift-effects.json` under their name instead of a gift id:
 }
 ```
 
-An interaction pays out once per event, not once per viewer action inside it: a
-10-like batch mapped to `apple` drops as many apples as the row's item count
-says, and its `count` field is only logged, never multiplied. Likes are not
-coalesced, so a busy room writes one log line and one socket message per like
-batch; leave the kind unmapped to keep it quiet on the board.
+An interaction pays out once per event: a like mapped to `apple` drops as many
+apples as the row's item count says. TikTok reports likes in batches, and the
+bridge splits each batch into one message per like, so a 10-like batch fires the
+mapping ten times and writes ten log lines. Leave the kind unmapped to keep a
+busy room quiet on the board.
 
 ## Gift id → effect mapping
 
@@ -230,6 +231,9 @@ kept; clicking the status chip in the debug panel prints them with
   to every connected page. The game applies it immediately; no reload needed.
 - Mappings whose gift is not in the current room stay listed as `Saved id`, so
   they survive a room change and can be cleared.
+- The **Live events** list above the table shows each gift and interaction as
+  the bridge forwards it, with the mapped effect or `unmapped`. It polls
+  `/api/events?since=N` once a second and keeps the last 100 entries.
 - The panel polls `/api/state` every 4 seconds for bridge status and a new
   catalog. Unsaved edits are never overwritten by a poll.
 
@@ -315,7 +319,7 @@ opens while it is on. Mapping lives in the panel at
 
 Always open the panel from the URL the bridge prints. A copy loaded from the
 game's static server or from disk shows the panel but cannot save, because
-`/api/state` and `/api/rules` do not exist on that server; the page says so in a
+`/api/state`, `/api/events` and `/api/rules` do not exist on that server; the page says so in a
 red banner.
 
 ## Local testing without going live
@@ -386,9 +390,9 @@ Bridge side (`server/bridge.py`):
 - There is no combo multiplier: a gift combo pays out once, so a Doughnut asks
   for 50 bombs no matter how many taps it took, and `CONFIG.maxBombs` (60)
   settles how many stay.
-- Interactions are forwarded as they arrive. A room that likes heavily writes
-  one log line per like batch and one socket message per batch; there is no
-  coalescing, so leave a kind unmapped when its volume would flood the board.
+- Interactions are forwarded as they arrive, and TikTok's like batches are split
+  into one message per like, so a busy room writes one log line and one socket
+  message per like. Leave a kind unmapped when its volume would flood the board.
 - Gift scores live in memory only. Reloading the page clears the session
   scoreboard, while the wins/losses record and debug toggles persist in
   `localStorage`. The mapping table persists on the bridge machine.

@@ -52,6 +52,8 @@ const hud = {
   debug: $('#debug'),
   winLap: $('#dbg-winlap'),
   dbgSound: $('#dbg-sound'),
+  dbgKeys: $('#dbg-keys'),
+  dbgAmbient: $('#dbg-ambient'),
   dbgGifts: $('#dbg-gifts'),
   dbgDeck: $('#dbg-deck'),
   dbgTiktok: $('#dbg-tiktok'),
@@ -80,22 +82,33 @@ let noiseBuf = null;
 let audioUnlocked = false;
 let audioFailed = false;
 
-// Sound is a stream setting, so it survives a reload.
+// Each audio channel is a stream setting, so it survives a reload.
 const SOUND_KEY = 'giftsnake.sound';
-let soundOn = (() => {
+const KEYS_KEY = 'giftsnake.keys';
+const AMBIENT_KEY = 'giftsnake.ambient';
+
+function readFlag(key) {
   try {
-    return localStorage.getItem(SOUND_KEY) !== '0';
+    return localStorage.getItem(key) !== '0';
   } catch (e) {
     return true;
   }
-})();
+}
 
-function saveSound() {
+function writeFlag(key, on) {
   try {
-    localStorage.setItem(SOUND_KEY, soundOn ? '1' : '0');
+    localStorage.setItem(key, on ? '1' : '0');
   } catch (e) {
     // Storage unavailable; the setting lasts for this session only.
   }
+}
+
+let soundOn = readFlag(SOUND_KEY);
+let keysOn = readFlag(KEYS_KEY);
+let ambientOn = readFlag(AMBIENT_KEY);
+
+function anySoundOn() {
+  return soundOn || keysOn || ambientOn;
 }
 
 // Stage ambience borrows the shared AudioContext above; it never opens its own.
@@ -105,12 +118,12 @@ const stageAudio = createStageAudio();
 // unlock on pointerdown/keydown, so no context exists before the first input.
 function unlockAudio() {
   audioUnlocked = true;
-  if (!soundOn || audioFailed) return;
+  if (!anySoundOn() || audioFailed) return;
   try {
     if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();
     if (ac.state === 'suspended') ac.resume().catch(() => {});
     stageAudio.setContext(ac);
-    stageAudio.setEnabled(soundOn);
+    stageAudio.setEnabled(ambientOn);
     loadSamples();
   } catch {
     audioFailed = true;
@@ -151,11 +164,11 @@ async function loadSamples() {
   }
 }
 
-function playSample(name, rate = 1) {
+function playSample(name, rate = 1, enabled = soundOn) {
   const s = SAMPLES[name];
   const buf = sampleBuf.get(name);
   const c = audio();
-  if (!buf || !c || !s) return false;
+  if (!buf || !c || !s || !enabled) return false;
   const src = c.createBufferSource();
   src.buffer = buf;
   src.playbackRate.value = rate;
@@ -168,7 +181,7 @@ function playSample(name, rate = 1) {
 }
 
 function audio() {
-  if (!soundOn || !audioUnlocked || audioFailed) return null;
+  if (!audioUnlocked || audioFailed) return null;
   if (!ac) {
     try {
       ac = new (window.AudioContext || window.webkitAudioContext)();
@@ -263,12 +276,14 @@ function keyUp(delay = 0) {
 function click() {
   // Mechanical switch: sampled press + release, pitch-varied per press so a
   // run of turns never sounds like one looped click.
-  if (playSample('click', rnd(0.94, 1.06))) return;
+  if (!keysOn) return;
+  if (playSample('click', rnd(0.94, 1.06), keysOn)) return;
   keyDown(0);
   keyUp(0.05);
 }
 
 function tone(freq, dur, type = 'sine', gain = 0.1, delay = 0, slideTo = null) {
+  if (!soundOn) return;
   const c = audio();
   if (!c) return;
   const t0 = c.currentTime + delay;
@@ -3752,15 +3767,33 @@ hud.winLap.addEventListener('change', () => {
   saveDebug();
 });
 
+// Resume the shared context while any channel is on, suspend it when all are off.
+function syncAudioContext() {
+  if (!ac) {
+    if (anySoundOn()) unlockAudio();
+    return;
+  }
+  if (anySoundOn()) ac.resume().catch(() => {});
+  else ac.suspend().catch(() => {});
+}
+
 hud.dbgSound.addEventListener('change', () => {
   soundOn = hud.dbgSound.checked;
-  saveSound();
-  if (soundOn && !ac) unlockAudio();
-  stageAudio.setEnabled(soundOn);
-  if (ac) {
-    if (soundOn) ac.resume().catch(() => {});
-    else ac.suspend().catch(() => {});
-  }
+  writeFlag(SOUND_KEY, soundOn);
+  syncAudioContext();
+});
+
+hud.dbgKeys.addEventListener('change', () => {
+  keysOn = hud.dbgKeys.checked;
+  writeFlag(KEYS_KEY, keysOn);
+  syncAudioContext();
+});
+
+hud.dbgAmbient.addEventListener('change', () => {
+  ambientOn = hud.dbgAmbient.checked;
+  writeFlag(AMBIENT_KEY, ambientOn);
+  stageAudio.setEnabled(ambientOn);
+  syncAudioContext();
 });
 
 hud.dbgGifts.addEventListener('change', () => {
@@ -3813,6 +3846,8 @@ renderTotals();
 renderLeaderboard();
 refreshRecord();
 hud.dbgSound.checked = soundOn;
+hud.dbgKeys.checked = keysOn;
+hud.dbgAmbient.checked = ambientOn;
 hud.winLap.checked = victoryLap;
 hud.dbgGifts.checked = simGifts;
 applyDeck();

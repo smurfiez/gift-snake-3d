@@ -6,3 +6,6 @@ __pycache__/
 shot*.png
 server/gift-effects.json
 server/logs/
+src-tauri/target/
+src-tauri/gen/schemas/
+.tauri-dist/
